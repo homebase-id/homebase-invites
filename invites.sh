@@ -32,16 +32,16 @@ CHECK THE SERVICE
       Prints "pong" if the service is up.
 
 CREATE AND LIST CODES  (create key)
-  create <uses> <source> [owner] [public-page]
+  create --uses <n> --source <text> [--owner <identity>] [--no-public-page]
       Makes a new code and prints it.
-        uses         how many people can sign up with it (1-10000)
-        source       free text noting where the code came from, e.g. "spring campaign"
-        owner        optional: the identity the code belongs to, e.g. frodo.demo.rocks.
-                     Pass "" to leave it out when you also set public-page.
-        public-page  optional: true or false (default true). Whether people who sign up with
-                     this code get a public home page on their identity.
+        --uses <n>             required: how many people can sign up with it (1-10000)
+        --source <text>        required: free text noting where the code came from,
+                               e.g. --source "spring campaign"
+        --owner <identity>     optional: the identity the code belongs to, e.g. frodo.demo.rocks
+        --no-public-page       optional: people who sign up with this code do NOT get a public
+                               home page on their identity. Without it, they do.
 
-  list [owner]
+  list [--owner <identity>]
       Lists codes with how many uses each has left: all of them, or just one owner's.
 
 TEST A CODE  (signup key; odin-core does these during a real signup)
@@ -53,13 +53,13 @@ TEST A CODE  (signup key; odin-core does these during a real signup)
       Gives back the code's most recent use.
 
 EXAMPLES
-  ./invites.sh create 5 "spring campaign" frodo.demo.rocks
+  ./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks
       5 signups, owned by frodo, new identities get a public home page
 
-  ./invites.sh create 10 "conference booth" "" false
+  ./invites.sh create --uses 10 --source "conference booth" --no-public-page
       10 signups, no owner, no public home page
 
-  ./invites.sh list frodo.demo.rocks
+  ./invites.sh list --owner frodo.demo.rocks
   ./invites.sh validate K7QX-M2PD-9FHW
 
 Every command prints the service's answer and the HTTP status, e.g. [200]. [401] means a wrong or
@@ -96,10 +96,19 @@ case "$cmd" in
     ;;
   create)
     need HOMEBASE_INVITES_CREATE_KEY
-    [[ $# -ge 2 ]] || { echo "usage: ./invites.sh create <uses> <source> [owner] [public-page]  (see ./invites.sh help)" >&2; exit 1; }
-    uses="$1"; source_text="$2"; owner="${3:-}"; public_page="${4:-true}"
-    [[ "$uses" =~ ^[0-9]+$ ]] || { echo "uses must be a number, e.g. 5" >&2; exit 1; }
-    [[ "$public_page" =~ ^(true|false)$ ]] || { echo "public-page must be true or false" >&2; exit 1; }
+    create_usage="usage: ./invites.sh create --uses <n> --source <text> [--owner <identity>] [--no-public-page]  (see ./invites.sh help)"
+    uses=""; source_text=""; owner=""; public_page=true
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --uses) uses="${2:-}"; shift 2 ;;
+        --source) source_text="${2:-}"; shift 2 ;;
+        --owner) owner="${2:-}"; shift 2 ;;
+        --no-public-page) public_page=false; shift ;;
+        *) echo "unknown option: $1" >&2; echo "$create_usage" >&2; exit 1 ;;
+      esac
+    done
+    [[ -n "$uses" && -n "$source_text" ]] || { echo "$create_usage" >&2; exit 1; }
+    [[ "$uses" =~ ^[0-9]+$ ]] || { echo "--uses must be a number, e.g. --uses 5" >&2; exit 1; }
     owner_json=null
     [[ -n "$owner" ]] && owner_json="\"$(json_string "$owner")\""
     call POST / "$HOMEBASE_INVITES_CREATE_KEY" \
@@ -108,7 +117,12 @@ case "$cmd" in
   list)
     need HOMEBASE_INVITES_CREATE_KEY
     query=""
-    [[ -n "${1:-}" ]] && query="?owner=$(printf '%s' "$1" | jq -sRr @uri 2>/dev/null || printf '%s' "$1")"
+    case "${1:-}" in
+      "") ;;
+      --owner) [[ -n "${2:-}" ]] || { echo "usage: ./invites.sh list [--owner <identity>]" >&2; exit 1; }
+               query="?owner=$(printf '%s' "$2" | jq -sRr @uri 2>/dev/null || printf '%s' "$2")" ;;
+      *) echo "usage: ./invites.sh list [--owner <identity>]" >&2; exit 1 ;;
+    esac
     call GET "/$query" "$HOMEBASE_INVITES_CREATE_KEY"
     ;;
   validate|use)
