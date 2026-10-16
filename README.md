@@ -18,7 +18,7 @@ dotnet test
 
 `./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
 repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks`,
-`./invites.sh list`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
+`./invites.sh list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
 
 ## Deploy
 
@@ -49,6 +49,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `POST /undo-use {code}` | signup | 204: gives the latest use back |
 | `POST / {owner?, maxUses, source, enablePublicWebPresence}` | create | the new code |
 | `GET /?owner=<odinId>` | create | the codes, all of them without `owner` |
+| `GET /stats?sinceDays=<n>` | create | codes and signups in total, by source, by owner and by week (Monday, UTC). `sinceDays` limits only the signups counted; the code counts (`neverUsed`, `usedUp`, `disabled`, codes, uses allowed) are always about every code as it is now |
 | `PATCH /<code> {maxUses?, source?, owner?, enablePublicWebPresence?, disabled?}` | create | the code as it is now; 404 if there is none. Fields left out stay as they are; `"owner": ""` removes the owner |
 
 Bad input (owner not a domain, `maxUses` outside 1..10000) is a 400. Creating a code:
