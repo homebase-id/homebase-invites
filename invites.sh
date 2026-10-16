@@ -45,6 +45,14 @@ CREATE AND LIST CODES  (create key)
       Lists codes with how many uses each has left, and whether each is disabled: all of them, or
       just one owner's.
 
+SEE HOW CODES ARE DOING  (create key)
+  stats [--since <days>] [--json]
+      Counts codes and signups: in total, by source, by owner, and per week.
+        --since <days>      count only signups from the last <days> days. The code counts
+                            (codes, uses allowed, never used, used up, disabled) are always
+                            about every code as it is now.
+        --json              print the service's JSON instead of the report (the report needs jq)
+
 CHANGE A CODE  (create key)
   edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner]
               [--public-page | --no-public-page]
@@ -78,6 +86,9 @@ EXAMPLES
       10 signups, no owner, no public home page
 
   ./invites.sh list --owner frodo.demo.rocks
+
+  ./invites.sh stats --since 30
+      signups in the last 30 days, by source, owner and week
 
   ./invites.sh edit K7QX-M2PD-9FHW --uses 20 --no-public-page
       allow 20 signups in total, and no public home page from now on
@@ -154,6 +165,48 @@ case "$cmd" in
       *) echo "usage: ./invites.sh list [--owner <identity>]" >&2; exit 1 ;;
     esac
     call GET "/$query" "$HOMEBASE_INVITES_CREATE_KEY"
+    ;;
+  stats)
+    need HOMEBASE_INVITES_CREATE_KEY
+    stats_usage="usage: ./invites.sh stats [--since <days>] [--json]"
+    query=""; as_json=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --since) [[ "${2:-}" =~ ^[0-9]+$ && "$2" -ge 1 ]] || { echo "--since must be a number of days, e.g. --since 30" >&2; exit 1; }
+                 query="?sinceDays=$2"; shift 2 ;;
+        --json) as_json=true; shift ;;
+        *) echo "unknown option: $1" >&2; echo "$stats_usage" >&2; exit 1 ;;
+      esac
+    done
+    if [[ "$as_json" == true ]] || ! command -v jq >/dev/null; then
+      call GET "/stats$query" "$HOMEBASE_INVITES_CREATE_KEY"
+      exit 0
+    fi
+    response="$(curl -sS -H "Odin-Api-Key: $HOMEBASE_INVITES_CREATE_KEY" -w '\n%{http_code}' "$API/stats$query")"
+    status="${response##*$'\n'}"; body="${response%$'\n'*}"
+    [[ "$status" == 200 ]] || { printf '%s\n[%s]\n' "$body" "$status"; exit 1; }
+    printf '%s' "$body" | jq -r '
+      def left(n): tostring | . + (" " * ([n - length, 0] | max));
+      def right(n): tostring | (" " * ([n - length, 0] | max)) + .;
+      def row(name): "  " + (name | left(34)) + (.codes | right(7)) + (.usesAllowed | right(9)) + (.signups | right(9));
+      (([.byWeek[].signups] | max) // 1) as $most
+      | "Signups " + (if .since then "since " + (.since / 1000 | floor | strftime("%Y-%m-%d")) else "of all time" end),
+        "",
+        "  " + ("" | left(34)) + ("codes" | right(7)) + ("allowed" | right(9)) + ("signups" | right(9)),
+        (.totals | row("total")),
+        "",
+        "by source",
+        (.bySource[] | row(if .name == "" then "(no source)" else .name end)),
+        "",
+        "by owner",
+        (if (.byOwner | length) == 0 then "  (no code has an owner)" else (.byOwner[] | row(.name)) end),
+        "",
+        "signups per week, from Monday",
+        (if (.byWeek | length) == 0 then "  (none)"
+         else (.byWeek[] | "  " + .week + (.signups | right(6)) + "  " + ("#" * ((.signups * 40 / $most) | ceil) // ""))
+         end),
+        "",
+        "codes: \(.neverUsed) never used, \(.usedUp) used up, \(.disabled) disabled"'
     ;;
   edit)
     need HOMEBASE_INVITES_CREATE_KEY

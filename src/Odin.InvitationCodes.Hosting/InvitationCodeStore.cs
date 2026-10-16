@@ -35,6 +35,28 @@ public record InvitationCodeChange(
 public class InvalidInvitationCodeRequestException(string message) : Exception(message);
 
 /// <summary>
+/// How the codes are doing. <see cref="Since"/> limits only the signups: the counts of codes, uses allowed,
+/// never used, used up and disabled are always about every code as it is now.
+/// </summary>
+/// <param name="Since">Signups counted from here (unix ms); null counts all of them</param>
+public record InvitationCodeStats(
+    long? Since,
+    InvitationCodeStatsLine Totals,
+    int NeverUsed,
+    int UsedUp,
+    int Disabled,
+    List<InvitationCodeStatsLine> BySource,
+    List<InvitationCodeStatsLine> ByOwner,
+    List<WeeklySignups> ByWeek);
+
+/// <param name="Name">The source or owner the line is for; null on the totals</param>
+/// <param name="UsesAllowed">The codes' MaxUses added up</param>
+public record InvitationCodeStatsLine(string? Name, int Codes, int UsesAllowed, int Signups);
+
+/// <param name="Week">The Monday the week starts on (UTC), as yyyy-MM-dd</param>
+public record WeeklySignups(string Week, int Signups);
+
+/// <summary>
 /// The invitation codes and their uses (#1908), in SQLite. A use records only when it happened: who signed
 /// up with a code is kept on their own registration, not here.
 ///
@@ -266,6 +288,88 @@ public class InvitationCodeStore
         }
 
         return await GetAsync(code);
+    }
+
+    //
+
+    /// <summary>
+    /// Counts codes and signups, in total, by source, by owner (codes without one are left out) and by week.
+    /// </summary>
+    /// <param name="since">Count only signups from here (unix ms); null counts all of them</param>
+    public async Task<InvitationCodeStats> StatsAsync(long? since)
+    {
+        await using var connection = await OpenAsync();
+
+        var totals = await ReadStatsLinesAsync(connection, since, "NULL", "", "");
+        var bySource = await ReadStatsLinesAsync(connection, since, "source", "", "GROUP BY source");
+        var byOwner = await ReadStatsLinesAsync(connection, since, "owner", "WHERE owner IS NOT NULL", "GROUP BY owner");
+
+        int neverUsed, usedUp, disabled;
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = PerCode +
+                """
+                SELECT COALESCE(SUM(uses = 0), 0), COALESCE(SUM(uses >= max_uses), 0), COALESCE(SUM(disabled), 0)
+                FROM per_code;
+                """;
+            command.Parameters.AddWithValue("@since", since ?? 0);
+            await using var reader = await command.ExecuteReaderAsync();
+            await reader.ReadAsync();
+            (neverUsed, usedUp, disabled) = (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
+        }
+
+        var byWeek = new List<WeeklySignups>();
+        await using (var command = connection.CreateCommand())
+        {
+            // '-6 days' then 'weekday 1' lands on the Monday on or before the use
+            command.CommandText =
+                """
+                SELECT date(used_at / 1000, 'unixepoch', '-6 days', 'weekday 1') AS week, COUNT(*)
+                FROM invitation_code_uses WHERE used_at >= @since
+                GROUP BY week ORDER BY week;
+                """;
+            command.Parameters.AddWithValue("@since", since ?? 0);
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                byWeek.Add(new WeeklySignups(reader.GetString(0), reader.GetInt32(1)));
+            }
+        }
+
+        return new InvitationCodeStats(since, totals.Single(), neverUsed, usedUp, disabled, bySource, byOwner, byWeek);
+    }
+
+    // One row per code: its uses ever, and its signups since @since
+    private const string PerCode =
+        """
+        WITH per_code AS (
+            SELECT c.code, c.owner, c.source, c.max_uses, c.disabled,
+                   COUNT(u.id) AS uses,
+                   COUNT(CASE WHEN u.used_at >= @since THEN 1 END) AS signups
+            FROM invitation_codes c LEFT JOIN invitation_code_uses u ON u.code = c.code
+            GROUP BY c.code
+        )
+        """;
+
+    private static async Task<List<InvitationCodeStatsLine>> ReadStatsLinesAsync(SqliteConnection connection,
+        long? since, string name, string where, string groupBy)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = PerCode +
+            $"""
+            SELECT {name}, COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0)
+            FROM per_code {where} {groupBy}
+            ORDER BY 4 DESC, 1;
+            """;
+        command.Parameters.AddWithValue("@since", since ?? 0);
+        await using var reader = await command.ExecuteReaderAsync();
+        var lines = new List<InvitationCodeStatsLine>();
+        while (await reader.ReadAsync())
+        {
+            lines.Add(new InvitationCodeStatsLine(reader.IsDBNull(0) ? null : reader.GetString(0),
+                reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
+        }
+        return lines;
     }
 
     //

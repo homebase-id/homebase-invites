@@ -55,6 +55,18 @@ admin.MapPost("/", async (CreateRequest request) =>
 
 admin.MapGet("/", async (string? owner) => await store.ListAsync(owner));
 
+// Counts codes and signups; sinceDays limits the signups counted to the last that many days
+admin.MapGet("/stats", async (int? sinceDays) =>
+{
+    if (sinceDays is < 1)
+    {
+        return Results.BadRequest("sinceDays must be 1 or more");
+    }
+
+    var since = sinceDays == null ? (long?)null : DateTimeOffset.UtcNow.AddDays(-sinceDays.Value).ToUnixTimeMilliseconds();
+    return Results.Ok(await store.StatsAsync(since));
+});
+
 // Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" removes the owner.
 admin.MapPatch("/{code}", async (string code, InvitationCodeChange change) =>
     await store.UpdateAsync(code, change) is { } updated ? Results.Ok(updated) : Results.NotFound());
