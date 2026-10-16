@@ -42,11 +42,29 @@ CREATE AND LIST CODES  (create key)
                                home page on their identity. Without it, they do.
 
   list [--owner <identity>]
-      Lists codes with how many uses each has left: all of them, or just one owner's.
+      Lists codes with how many uses each has left, and whether each is disabled: all of them, or
+      just one owner's.
+
+CHANGE A CODE  (create key)
+  edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner]
+              [--public-page | --no-public-page]
+      Changes only what you give; everything else stays as it is.
+        --uses <n>          the new total number of signups allowed (1-10000). Uses already taken
+                            still count, so lowering it below them leaves none left.
+        --source <text>     new note on where the code came from
+        --owner <identity>  give the code to this identity
+        --no-owner          take the code away from its owner
+        --public-page       people who sign up with it get a public home page
+        --no-public-page    they do not
+
+  disable <code>
+      Stops the code working, whatever uses it has left. Nothing else changes.
+  enable <code>
+      Lets a disabled code work again.
 
 TEST A CODE  (signup key; odin-core does these during a real signup)
   validate <code>
-      Says whether the code exists and still has a use left. Does not use it up.
+      Says whether the code exists, is not disabled, and still has a use left. Does not use it up.
   use <code>
       Takes one use of the code, exactly as a real signup would. Careful on real codes.
   undo <code>
@@ -60,10 +78,15 @@ EXAMPLES
       10 signups, no owner, no public home page
 
   ./invites.sh list --owner frodo.demo.rocks
+
+  ./invites.sh edit K7QX-M2PD-9FHW --uses 20 --no-public-page
+      allow 20 signups in total, and no public home page from now on
+
+  ./invites.sh disable K7QX-M2PD-9FHW
   ./invites.sh validate K7QX-M2PD-9FHW
 
 Every command prints the service's answer and the HTTP status, e.g. [200]. [401] means a wrong or
-missing key; [400] means bad input, and the message says what.
+missing key; [400] means bad input, and the message says what; [404] on edit means no such code.
 EOF
 }
 
@@ -79,6 +102,13 @@ call() { # method path key [body]
 }
 
 code_body() { printf '{"code":"%s"}' "$(json_string "$1")"; }
+
+# A code for use in the URL: spaces dropped, nothing but letters, digits and dashes
+path_code() {
+  local code="${1// /}"
+  [[ "$code" =~ ^[A-Za-z0-9-]+$ ]] || return 1
+  printf '%s' "$code"
+}
 
 cmd="${1:-}"
 shift || true
@@ -124,6 +154,35 @@ case "$cmd" in
       *) echo "usage: ./invites.sh list [--owner <identity>]" >&2; exit 1 ;;
     esac
     call GET "/$query" "$HOMEBASE_INVITES_CREATE_KEY"
+    ;;
+  edit)
+    need HOMEBASE_INVITES_CREATE_KEY
+    edit_usage="usage: ./invites.sh edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner] [--public-page | --no-public-page]"
+    code="$(path_code "${1:-}")" || { echo "$edit_usage" >&2; exit 1; }
+    shift
+    fields=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --uses) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "--uses must be a number, e.g. --uses 5" >&2; exit 1; }
+                fields+=("\"maxUses\":$2"); shift 2 ;;
+        --source) [[ -n "${2:-}" ]] || { echo "$edit_usage" >&2; exit 1; }
+                  fields+=("\"source\":\"$(json_string "$2")\""); shift 2 ;;
+        --owner) [[ -n "${2:-}" ]] || { echo "$edit_usage" >&2; exit 1; }
+                 fields+=("\"owner\":\"$(json_string "$2")\""); shift 2 ;;
+        --no-owner) fields+=("\"owner\":\"\""); shift ;;
+        --public-page) fields+=("\"enablePublicWebPresence\":true"); shift ;;
+        --no-public-page) fields+=("\"enablePublicWebPresence\":false"); shift ;;
+        *) echo "unknown option: $1" >&2; echo "$edit_usage" >&2; exit 1 ;;
+      esac
+    done
+    [[ ${#fields[@]} -gt 0 ]] || { echo "nothing to change" >&2; echo "$edit_usage" >&2; exit 1; }
+    call PATCH "/$code" "$HOMEBASE_INVITES_CREATE_KEY" "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  disable|enable)
+    need HOMEBASE_INVITES_CREATE_KEY
+    code="$(path_code "${1:-}")" || { echo "usage: ./invites.sh $cmd <code>" >&2; exit 1; }
+    disabled=false; [[ "$cmd" == disable ]] && disabled=true
+    call PATCH "/$code" "$HOMEBASE_INVITES_CREATE_KEY" "{\"disabled\":$disabled}"
     ;;
   validate|use)
     need HOMEBASE_INVITES_SIGNUP_KEY

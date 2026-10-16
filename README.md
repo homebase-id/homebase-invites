@@ -18,7 +18,7 @@ dotnet test
 
 `./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
 repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks`,
-`./invites.sh list`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
+`./invites.sh list`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
 
 ## Deploy
 
@@ -38,6 +38,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `source` | free text: where the code came from |
 | `enablePublicWebPresence` | whether an identity that signs up with it gets a public home page |
 | `maxUses`, `usesLeft` | how many signups it allows, and how many are left |
+| `disabled` | a disabled code cannot be used, whatever uses it has left |
 
 ## API (`/api/v1/invitation-codes`, key in the `Odin-Api-Key` header)
 
@@ -48,6 +49,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `POST /undo-use {code}` | signup | 204: gives the latest use back |
 | `POST / {owner?, maxUses, source, enablePublicWebPresence}` | create | the new code |
 | `GET /?owner=<odinId>` | create | the codes, all of them without `owner` |
+| `PATCH /<code> {maxUses?, source?, owner?, enablePublicWebPresence?, disabled?}` | create | the code as it is now; 404 if there is none. Fields left out stay as they are; `"owner": ""` removes the owner |
 
 Bad input (owner not a domain, `maxUses` outside 1..10000) is a 400. Creating a code:
 
@@ -77,4 +79,4 @@ never to self-hosted servers.
 
 - No rate limiting on validation.
 - An identity host that crashes between taking a use and registering leaks that use.
-- Codes stay valid after their owner is deleted, and cannot be changed or disabled.
+- Codes stay valid after their owner is deleted, until someone disables them.
