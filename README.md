@@ -14,6 +14,12 @@ dotnet test
 ./build-docker-image.sh && ./run-attached.sh              # the image, on 127.0.0.1:5246, database in ./data
 ```
 
+## Command line
+
+`./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
+repo, readable only by you); then `./invites.sh create 5 "spring campaign" frodo.demo.rocks`,
+`./invites.sh list`, `validate`, `use`, `undo`. `./invites.sh help` lists them all.
+
 ## Deploy
 
 `.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
