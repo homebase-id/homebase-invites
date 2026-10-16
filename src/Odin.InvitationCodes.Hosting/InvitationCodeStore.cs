@@ -148,7 +148,8 @@ public class InvitationCodeStore
     //
 
     /// <summary>
-    /// The codes, oldest first; only the owner's when <paramref name="owner"/> is given.
+    /// The codes, oldest first; only the owner's when <paramref name="owner"/> is given. Codes made in the same
+    /// millisecond keep the order they were made in.
     /// </summary>
     public async Task<List<InvitationCode>> ListAsync(string? owner)
     {
@@ -156,11 +157,11 @@ public class InvitationCodeStore
         await using var command = connection.CreateCommand();
         if (owner == null)
         {
-            command.CommandText = SelectWithUsesLeft + " GROUP BY c.code ORDER BY c.created_at;";
+            command.CommandText = SelectWithUsesLeft + " GROUP BY c.code ORDER BY c.created_at, c.rowid;";
         }
         else
         {
-            command.CommandText = SelectWithUsesLeft + " WHERE c.owner = @owner GROUP BY c.code ORDER BY c.created_at;";
+            command.CommandText = SelectWithUsesLeft + " WHERE c.owner = @owner GROUP BY c.code ORDER BY c.created_at, c.rowid;";
             command.Parameters.AddWithValue("@owner", NormalizeOwner(owner));
         }
 

@@ -1,0 +1,34 @@
+name: "Build and test"
+
+# Every pull request and every push to main. The deploy workflow builds and tests again before it ships.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # The invites.sh tests run the script with bash, curl and jq; they fail rather than skip under CI
+      # when jq is missing
+      - name: Check the command line tools
+        run: bash --version | head -1 && curl --version | head -1 && jq --version
+
+      - name: Build
+        run: dotnet build -c Release --warnaserror
+
+      - name: Test
+        run: dotnet test -c Release --no-build --logger "console;verbosity=normal"

@@ -20,6 +20,12 @@ dotnet test
 repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks`,
 `./invites.sh list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
 
+## Tests
+
+`dotnet test` runs the store tests, every API endpoint over HTTP in process, and `invites.sh` with bash against
+the service on a real port. The script tests need `jq`: without it they are skipped locally and fail under CI.
+`.github/workflows/test.yml` builds and runs them on every pull request and push to main.
+
 ## Deploy
 
 `.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
