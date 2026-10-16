@@ -1,4 +1,4 @@
-name: "Build and deploy to bleeding edge"
+name: "Build and deploy to production"
 
 on:
   workflow_dispatch:
@@ -137,4 +137,4 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=10 \
             "$ANSIBLE_CONTROLLER" \
-            "deploy homebase-invites bleeding_edge homebase-invites-internal ${TAG} start_container=${START_CONTAINER}"
+            "deploy homebase-invites aux homebase-invites-internal ${TAG} start_container=${START_CONTAINER}"

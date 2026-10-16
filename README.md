@@ -18,7 +18,7 @@ dotnet test
 
 `.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
 `ghcr.io/homebase-id/homebase-invites-internal:<branch>`, then asks the ansible controller to deploy it to
-bleeding edge, the same way homebase-social-sync deploys. The controller only deploys what the DevOps repo
+blackbird-aux, behind Caddy at https://invites.ravenhosting.cloud, the same way homebase-social-sync deploys. The controller only deploys what the DevOps repo
 allowlists, so that has to be set up first.
 
 The container listens on 8080 and keeps its database in `/data`: mount a volume there.
