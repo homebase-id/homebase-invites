@@ -18,7 +18,7 @@ dotnet test
 
 `./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
 repo, readable only by you); then `./invites.sh create 5 "spring campaign" frodo.demo.rocks`,
-`./invites.sh list`, `validate`, `use`, `undo`. `./invites.sh help` lists them all.
+`./invites.sh list`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
 
 ## Deploy
 

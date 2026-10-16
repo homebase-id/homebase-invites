@@ -17,22 +17,53 @@ API="$URL/api/v1/invitation-codes"
 
 usage() {
   cat <<EOF
-Usage: ./invites.sh <command> [args]
+invites.sh - manage Homebase invitation codes at $URL
 
-  setup                                   save the keys to $CONFIG
-  ping                                    is the service up?
+An invitation code lets people sign up for a Homebase identity. Each code can be used a set number
+of times. Codes look like K7QX-M2PD-9FHW; you can type them in any case, with or without dashes.
 
-  create <uses> <source> [owner] [web]    create a code; web = true|false (default true)
-  list [owner]                            all codes, or one owner's
+FIRST TIME
+  setup
+      Asks for the two API keys (hidden as you type) and saves them to $CONFIG.
+      The create key is for create and list; the signup key is for validate, use and undo.
 
-  validate <code>                         exists and has a use left? (does not use it)
-  use <code>                              take one use (signup does this)
-  undo <code>                             give the last use back
+CHECK THE SERVICE
+  ping
+      Prints "pong" if the service is up.
 
-Examples:
+CREATE AND LIST CODES  (create key)
+  create <uses> <source> [owner] [public-page]
+      Makes a new code and prints it.
+        uses         how many people can sign up with it (1-10000)
+        source       free text noting where the code came from, e.g. "spring campaign"
+        owner        optional: the identity the code belongs to, e.g. frodo.demo.rocks.
+                     Pass "" to leave it out when you also set public-page.
+        public-page  optional: true or false (default true). Whether people who sign up with
+                     this code get a public home page on their identity.
+
+  list [owner]
+      Lists codes with how many uses each has left: all of them, or just one owner's.
+
+TEST A CODE  (signup key; odin-core does these during a real signup)
+  validate <code>
+      Says whether the code exists and still has a use left. Does not use it up.
+  use <code>
+      Takes one use of the code, exactly as a real signup would. Careful on real codes.
+  undo <code>
+      Gives back the code's most recent use.
+
+EXAMPLES
   ./invites.sh create 5 "spring campaign" frodo.demo.rocks
-  ./invites.sh create 10 conference "" false
+      5 signups, owned by frodo, new identities get a public home page
+
+  ./invites.sh create 10 "conference booth" "" false
+      10 signups, no owner, no public home page
+
   ./invites.sh list frodo.demo.rocks
+  ./invites.sh validate K7QX-M2PD-9FHW
+
+Every command prints the service's answer and the HTTP status, e.g. [200]. [401] means a wrong or
+missing key; [400] means bad input, and the message says what.
 EOF
 }
 
@@ -65,13 +96,14 @@ case "$cmd" in
     ;;
   create)
     need HOMEBASE_INVITES_CREATE_KEY
-    uses="${1:?uses is required}"; source_text="${2:?source is required}"; owner="${3:-}"; web="${4:-true}"
-    [[ "$uses" =~ ^[0-9]+$ ]] || { echo "uses must be a number" >&2; exit 1; }
-    [[ "$web" =~ ^(true|false)$ ]] || { echo "web must be true or false" >&2; exit 1; }
+    [[ $# -ge 2 ]] || { echo "usage: ./invites.sh create <uses> <source> [owner] [public-page]  (see ./invites.sh help)" >&2; exit 1; }
+    uses="$1"; source_text="$2"; owner="${3:-}"; public_page="${4:-true}"
+    [[ "$uses" =~ ^[0-9]+$ ]] || { echo "uses must be a number, e.g. 5" >&2; exit 1; }
+    [[ "$public_page" =~ ^(true|false)$ ]] || { echo "public-page must be true or false" >&2; exit 1; }
     owner_json=null
     [[ -n "$owner" ]] && owner_json="\"$(json_string "$owner")\""
     call POST / "$HOMEBASE_INVITES_CREATE_KEY" \
-      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":\"$(json_string "$source_text")\",\"enablePublicWebPresence\":$web}"
+      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":\"$(json_string "$source_text")\",\"enablePublicWebPresence\":$public_page}"
     ;;
   list)
     need HOMEBASE_INVITES_CREATE_KEY
