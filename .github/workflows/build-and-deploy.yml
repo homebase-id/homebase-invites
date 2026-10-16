@@ -1,0 +1,140 @@
+name: "Build and deploy to bleeding edge"
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_choice:
+        type: choice
+        required: true
+        description: "Start container"
+        default: 'true'
+        options:
+        - 'true'
+        - 'false'
+
+#
+# Copied from homebase-social-sync's build-and-deploy.yml, which is the reviewed shape for a service
+# outside odin-core: build and push to ghcr, then ask the ansible controller to deploy with the
+# constrained CONTROLLER_DEPLOY_KEY. The controller routes only what odin-deploy.sh and run-playbook.sh
+# in the DevOps repo allowlist, so the deploy job fails until homebase-invites is added there.
+#
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: "${{ github.repository }}-internal"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.image.outputs.image_tag }}
+
+    steps:
+      - name: Log all workflow inputs and current branch
+        run: |
+          echo "GITHUB_REF: $GITHUB_REF"
+          echo "Workflow inputs as JSON: $INPUTS"
+        env:
+          INPUTS: ${{ toJson(github.event.inputs) }}
+          GITHUB_REF: ${{ github.ref }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build and test
+        run: |
+          dotnet build -c Release --warnaserror
+          dotnet test -c Release --no-build
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata (labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # The controller builds the image reference itself from a fixed registry, an allowlisted
+      # repository and this tag, so the tag must be a docker tag and the repository must be the one
+      # it allowlists.
+      - name: Derive and check the image reference
+        id: image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          FULL_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          image="$(printf '%s' "$FULL_IMAGE" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$image" != "ghcr.io/homebase-id/homebase-invites-internal" ]]; then
+            echo "Refusing: the controller allowlists homebase-invites-internal,"
+            echo "but this workflow would build and deploy '${image}'."
+            exit 1
+          fi
+          tag="$(printf '%s' "$REF_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-')"
+          tag="${tag:0:128}"
+          [[ "$tag" =~ ^[a-z0-9] ]] || tag="x${tag:0:127}"
+          echo "image_tag=${tag}" >>"$GITHUB_OUTPUT"
+          echo "image_ref=${image}:${tag}" >>"$GITHUB_OUTPUT"
+          echo "Building and deploying: ${image}:${tag}"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.image_ref }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=homebase-invites
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Environment secrets reach only the job that declares the environment
+    environment: deploy
+    permissions: {}
+
+    steps:
+      # Every ${{ }} goes through env: and is read back as a shell variable, so a tag cannot inject
+      # into the script. The `deploy ...` string is not a remote command: the key is pinned to
+      # odin-deploy.sh on the controller, which validates every field. See odin-core's
+      # host-build-and-deploy-branch-to-environment.yml for the full explanation.
+      - name: Deploy through the ansible controller
+        env:
+          ANSIBLE_CONTROLLER: deploy@167.235.203.161
+          TAG: ${{ needs.build.outputs.image_tag }}
+          START_CONTAINER: ${{ github.event.inputs.start_choice }}
+          DEPLOY_KEY: ${{ secrets.CONTROLLER_DEPLOY_KEY }}
+        run: |
+          key="${RUNNER_TEMP}/ansible_controller_deploy_key"
+          trap 'rm -f "$key"' EXIT
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$DEPLOY_KEY" >"$key"
+          ssh -i "$key" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            "$ANSIBLE_CONTROLLER" \
+            "deploy homebase-invites bleeding_edge homebase-invites-internal ${TAG} start_container=${START_CONTAINER}"
