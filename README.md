@@ -10,7 +10,18 @@ is kept on the new identity's registration, not here. Admins create and list cod
 ```bash
 dotnet run --project src/Odin.InvitationCodes.Hosting     # http://localhost:5246, Development config
 dotnet test
+
+./build-docker-image.sh && ./run-attached.sh              # the image, on 127.0.0.1:5246, database in ./data
 ```
+
+## Deploy
+
+`.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
+`ghcr.io/homebase-id/homebase-invites-internal:<branch>`, then asks the ansible controller to deploy it to
+bleeding edge, the same way homebase-social-sync deploys. The controller only deploys what the DevOps repo
+allowlists, so that has to be set up first.
+
+The container listens on 8080 and keeps its database in `/data`: mount a volume there.
 
 ## A code
 
