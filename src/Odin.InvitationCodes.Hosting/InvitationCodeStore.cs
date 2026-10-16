@@ -9,13 +9,25 @@ namespace Odin.InvitationCodes.Hosting;
 /// <param name="Owner">The identity the code belongs to, if any</param>
 /// <param name="Source">Free text saying where the code came from</param>
 /// <param name="EnablePublicWebPresence">Whether an identity that signs up with the code gets a public home page</param>
+/// <param name="Disabled">A disabled code cannot be used, whatever uses it has left</param>
 public record InvitationCode(
     string Code,
     string? Owner,
     string Source,
     bool EnablePublicWebPresence,
     int MaxUses,
-    int UsesLeft);
+    int UsesLeft,
+    bool Disabled);
+
+/// <summary>
+/// A change to a code; null leaves a field as it is. An empty <see cref="Owner"/> removes the owner.
+/// </summary>
+public record InvitationCodeChange(
+    int? MaxUses = null,
+    string? Source = null,
+    string? Owner = null,
+    bool? EnablePublicWebPresence = null,
+    bool? Disabled = null);
 
 /// <summary>
 /// A request the store refuses: a bad owner or number of uses. The API answers 400.
@@ -84,7 +96,7 @@ public class InvitationCodeStore
             {
                 await command.ExecuteNonQueryAsync();
                 return new InvitationCode(InvitationCodeFormat.Display(code), normalizedOwner, normalizedSource,
-                    enablePublicWebPresence, maxUses, maxUses);
+                    enablePublicWebPresence, maxUses, maxUses, Disabled: false);
             }
             catch (SqliteException e) when (e.SqliteErrorCode == SqliteConstraintError && attempt < MaxCreateAttempts)
             {
@@ -142,7 +154,7 @@ public class InvitationCodeStore
     //
 
     /// <summary>
-    /// Records a use if the code exists and has one left, and returns the code; null if refused.
+    /// Records a use if the code exists, is not disabled and has one left, and returns the code; null if refused.
     /// One statement takes the use, so two signups racing for the last use cannot both get it.
     /// </summary>
     public async Task<InvitationCode?> TryUseAsync(string? input)
@@ -162,6 +174,7 @@ public class InvitationCodeStore
             WHERE EXISTS (
                 SELECT 1 FROM invitation_codes c
                 WHERE c.code = @code
+                  AND c.disabled = 0
                   AND c.max_uses > (SELECT COUNT(*) FROM invitation_code_uses u WHERE u.code = @code)
             );
             """ + SelectWithUsesLeft + " WHERE c.code = @code AND changes() = 1 GROUP BY c.code;";
@@ -194,9 +207,72 @@ public class InvitationCodeStore
 
     //
 
+    /// <summary>
+    /// Changes a code and returns it as it is now; null if there is no such code. Lowering MaxUses below the uses
+    /// already taken leaves none left; it never takes a use back.
+    /// </summary>
+    public async Task<InvitationCode?> UpdateAsync(string? input, InvitationCodeChange change)
+    {
+        var code = InvitationCodeFormat.Normalize(input);
+        if (code == null)
+        {
+            return null;
+        }
+
+        var sets = new List<string>();
+        await using var connection = await OpenAsync();
+        await using var command = connection.CreateCommand();
+
+        if (change.MaxUses != null)
+        {
+            if (change.MaxUses is < 1 or > MaxUsesLimit)
+            {
+                throw new InvalidInvitationCodeRequestException($"MaxUses must be between 1 and {MaxUsesLimit}");
+            }
+            sets.Add("max_uses = @maxUses");
+            command.Parameters.AddWithValue("@maxUses", change.MaxUses.Value);
+        }
+        if (change.Source != null)
+        {
+            sets.Add("source = @source");
+            command.Parameters.AddWithValue("@source", change.Source.Trim());
+        }
+        if (change.Owner != null)
+        {
+            sets.Add("owner = @owner");
+            command.Parameters.AddWithValue("@owner",
+                change.Owner.Trim() == "" ? DBNull.Value : NormalizeOwner(change.Owner));
+        }
+        if (change.EnablePublicWebPresence != null)
+        {
+            sets.Add("enable_public_web_presence = @enablePublicWebPresence");
+            command.Parameters.AddWithValue("@enablePublicWebPresence", change.EnablePublicWebPresence.Value);
+        }
+        if (change.Disabled != null)
+        {
+            sets.Add("disabled = @disabled");
+            command.Parameters.AddWithValue("@disabled", change.Disabled.Value);
+        }
+        if (sets.Count == 0)
+        {
+            throw new InvalidInvitationCodeRequestException("Nothing to change");
+        }
+
+        command.CommandText = $"UPDATE invitation_codes SET {string.Join(", ", sets)} WHERE code = @code;";
+        command.Parameters.AddWithValue("@code", code);
+        if (await command.ExecuteNonQueryAsync() == 0)
+        {
+            return null;
+        }
+
+        return await GetAsync(code);
+    }
+
+    //
+
     private const string SelectWithUsesLeft =
         """
-        SELECT c.code, c.owner, c.source, c.enable_public_web_presence, c.max_uses, c.max_uses - COUNT(u.id)
+        SELECT c.code, c.owner, c.source, c.enable_public_web_presence, c.max_uses, c.max_uses - COUNT(u.id), c.disabled
         FROM invitation_codes c LEFT JOIN invitation_code_uses u ON u.code = c.code
         """;
 
@@ -208,7 +284,8 @@ public class InvitationCodeStore
             reader.GetString(2),
             reader.GetBoolean(3),
             reader.GetInt32(4),
-            Math.Max(0, reader.GetInt32(5)));
+            Math.Max(0, reader.GetInt32(5)),
+            reader.GetBoolean(6));
     }
 
     // Two or more labels of letters, digits and inner hyphens, each 1-63 long
@@ -267,7 +344,8 @@ public class InvitationCodeStore
                     source TEXT NOT NULL,
                     enable_public_web_presence INTEGER NOT NULL,
                     max_uses INTEGER NOT NULL,
-                    created_at INTEGER NOT NULL
+                    created_at INTEGER NOT NULL,
+                    disabled INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS ix_invitation_codes_owner ON invitation_codes(owner);
                 CREATE TABLE IF NOT EXISTS invitation_code_uses (
@@ -278,6 +356,17 @@ public class InvitationCodeStore
                 CREATE INDEX IF NOT EXISTS ix_invitation_code_uses_code ON invitation_code_uses(code);
                 """;
             await command.ExecuteNonQueryAsync();
+
+            // Databases created before codes could be disabled lack the column
+            await using var columns = connection.CreateCommand();
+            columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('invitation_codes') WHERE name = 'disabled';";
+            if (Convert.ToInt64(await columns.ExecuteScalarAsync()) == 0)
+            {
+                await using var alter = connection.CreateCommand();
+                alter.CommandText = "ALTER TABLE invitation_codes ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;";
+                await alter.ExecuteNonQueryAsync();
+            }
+
             _initialized = true;
         }
         finally

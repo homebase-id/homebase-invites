@@ -29,7 +29,7 @@ var signup = root.MapGroup("").AddEndpointFilter(InvitationCodeApi.RequireApiKey
 signup.MapPost("/validate", async (CodeRequest request) =>
 {
     var code = await store.GetAsync(request.Code);
-    return new ValidateResponse(code is { UsesLeft: > 0 });
+    return new ValidateResponse(code is { UsesLeft: > 0, Disabled: false });
 });
 
 signup.MapPost("/use", async (CodeRequest request) =>
@@ -54,6 +54,10 @@ admin.MapPost("/", async (CreateRequest request) =>
     await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence));
 
 admin.MapGet("/", async (string? owner) => await store.ListAsync(owner));
+
+// Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" removes the owner.
+admin.MapPatch("/{code}", async (string code, InvitationCodeChange change) =>
+    await store.UpdateAsync(code, change) is { } updated ? Results.Ok(updated) : Results.NotFound());
 
 app.Run();
 

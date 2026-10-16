@@ -125,4 +125,107 @@ public class InvitationCodeStoreTests
         Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => Create(0));
         Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => _store.ListAsync("not a domain"));
     }
+
+    [Test]
+    public async Task ADisabledCodeCannotBeUsedUntilEnabled()
+    {
+        var created = await Create(5);
+
+        var disabled = await _store.UpdateAsync(created.Code, new InvitationCodeChange(Disabled: true));
+        Assert.That(disabled!.Disabled, Is.True);
+        Assert.That(await _store.TryUseAsync(created.Code), Is.Null);
+        Assert.That((await _store.GetAsync(created.Code))!.UsesLeft, Is.EqualTo(5));
+
+        await _store.UpdateAsync(created.Code, new InvitationCodeChange(Disabled: false));
+        Assert.That(await _store.TryUseAsync(created.Code), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task EditChangesOnlyWhatIsGiven()
+    {
+        var created = await Create(5);
+
+        var edited = await _store.UpdateAsync(created.Code.ToLowerInvariant(),
+            new InvitationCodeChange(MaxUses: 8, Source: " renamed ", EnablePublicWebPresence: false));
+
+        Assert.That(edited, Is.EqualTo(created with
+        {
+            MaxUses = 8, UsesLeft = 8, Source = "renamed", EnablePublicWebPresence = false
+        }));
+    }
+
+    [Test]
+    public async Task EditCanChangeOrRemoveTheOwner()
+    {
+        var created = await Create(1);
+
+        var moved = await _store.UpdateAsync(created.Code, new InvitationCodeChange(Owner: "Sam.DotYou.Cloud"));
+        Assert.That(moved!.Owner, Is.EqualTo("sam.dotyou.cloud"));
+
+        var removed = await _store.UpdateAsync(created.Code, new InvitationCodeChange(Owner: ""));
+        Assert.That(removed!.Owner, Is.Null);
+    }
+
+    [Test]
+    public async Task LoweringMaxUsesBelowTheUsesTakenLeavesNone()
+    {
+        var created = await Create(3);
+        await _store.TryUseAsync(created.Code);
+        await _store.TryUseAsync(created.Code);
+
+        var edited = await _store.UpdateAsync(created.Code, new InvitationCodeChange(MaxUses: 1));
+
+        Assert.That(edited!.UsesLeft, Is.EqualTo(0));
+        Assert.That(await _store.TryUseAsync(created.Code), Is.Null);
+    }
+
+    [Test]
+    public async Task EditRefusesBadInputAndUnknownCodes()
+    {
+        var created = await Create(1);
+
+        Assert.That(await _store.UpdateAsync("K7QXM2PD9FHW", new InvitationCodeChange(MaxUses: 2)), Is.Null);
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            _store.UpdateAsync(created.Code, new InvitationCodeChange()));
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            _store.UpdateAsync(created.Code, new InvitationCodeChange(MaxUses: 0)));
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            _store.UpdateAsync(created.Code, new InvitationCodeChange(Owner: "not a domain")));
+    }
+
+    [Test]
+    public async Task ADatabaseFromBeforeDisablingIsUpgraded()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"invitation-codes-old-{Guid.NewGuid()}.db");
+        try
+        {
+            await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE invitation_codes (code TEXT NOT NULL PRIMARY KEY, owner TEXT NULL, source TEXT NOT NULL,
+                        enable_public_web_presence INTEGER NOT NULL, max_uses INTEGER NOT NULL, created_at INTEGER NOT NULL);
+                    CREATE TABLE invitation_code_uses (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, used_at INTEGER NOT NULL);
+                    INSERT INTO invitation_codes VALUES ('K7QXM2PD9FHW', NULL, 'old', 1, 2, 0);
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var store = new InvitationCodeStore(path);
+
+            Assert.That(await store.GetAsync("K7QX-M2PD-9FHW"), Is.EqualTo(
+                new InvitationCode("K7QX-M2PD-9FHW", null, "old", true, 2, 2, Disabled: false)));
+            Assert.That(await store.TryUseAsync("K7QX-M2PD-9FHW"), Is.Not.Null);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            foreach (var file in new[] { path, path + "-wal", path + "-shm" })
+            {
+                File.Delete(file);
+            }
+        }
+    }
 }
