@@ -101,18 +101,23 @@ missing key; [400] means bad input, and the message says what; [404] on edit mea
 EOF
 }
 
-need() { [[ -n "${!1:-}" ]] || { echo "$1 is not set; run ./invites.sh setup" >&2; exit 1; }; }
+die() { printf '%s\n' "$@" >&2; exit 1; }
 
-json_string() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+need() { [[ -n "${!1:-}" ]] || die "$1 is not set; run ./invites.sh setup"; }
 
-call() { # method path key [body]
-  local method="$1" path="$2" key="$3" body="${4:-}"
+check_uses() { [[ "$1" =~ ^[0-9]+$ ]] || die "--uses must be a number, e.g. --uses 5"; }
+
+# A JSON string, quotes included
+json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+
+call() { # method path [body]; sends $key
+  local method="$1" path="$2" body="${3:-}"
   local args=(-sS -X "$method" -H "Odin-Api-Key: $key" -w '\n[%{http_code}]\n')
   [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' -d "$body")
   curl "${args[@]}" "$API$path"
 }
 
-code_body() { printf '{"code":"%s"}' "$(json_string "$1")"; }
+code_body() { printf '{"code":%s}' "$(json_string "$1")"; }
 
 # A code for use in the URL: spaces dropped, nothing but letters, digits and dashes
 path_code() {
@@ -123,6 +128,11 @@ path_code() {
 
 cmd="${1:-}"
 shift || true
+
+case "$cmd" in
+  create|list|stats|edit|disable|enable) need HOMEBASE_INVITES_CREATE_KEY; key="$HOMEBASE_INVITES_CREATE_KEY" ;;
+  validate|use|undo) need HOMEBASE_INVITES_SIGNUP_KEY; key="$HOMEBASE_INVITES_SIGNUP_KEY" ;;
+esac
 
 case "$cmd" in
   setup)
@@ -136,55 +146,51 @@ case "$cmd" in
     curl -sS -w '\n[%{http_code}]\n' "$URL/ping"
     ;;
   create)
-    need HOMEBASE_INVITES_CREATE_KEY
     create_usage="usage: ./invites.sh create --uses <n> --source <text> [--owner <identity>] [--no-public-page]  (see ./invites.sh help)"
-    uses=""; source_text=""; owner=""; public_page=true
+    uses=""; source_text=""; owner_json=null; public_page=true
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --uses) uses="${2:-}"; shift 2 ;;
         --source) source_text="${2:-}"; shift 2 ;;
-        --owner) owner="${2:-}"; shift 2 ;;
+        --owner) [[ -n "${2:-}" ]] && owner_json="$(json_string "$2")"; shift 2 ;;
         --no-public-page) public_page=false; shift ;;
-        *) echo "unknown option: $1" >&2; echo "$create_usage" >&2; exit 1 ;;
+        *) die "unknown option: $1" "$create_usage" ;;
       esac
     done
-    [[ -n "$uses" && -n "$source_text" ]] || { echo "$create_usage" >&2; exit 1; }
-    [[ "$uses" =~ ^[0-9]+$ ]] || { echo "--uses must be a number, e.g. --uses 5" >&2; exit 1; }
-    owner_json=null
-    [[ -n "$owner" ]] && owner_json="\"$(json_string "$owner")\""
-    call POST / "$HOMEBASE_INVITES_CREATE_KEY" \
-      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":\"$(json_string "$source_text")\",\"enablePublicWebPresence\":$public_page}"
+    [[ -n "$uses" && -n "$source_text" ]] || die "$create_usage"
+    check_uses "$uses"
+    call POST / \
+      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":$(json_string "$source_text"),\"enablePublicWebPresence\":$public_page}"
     ;;
   list)
-    need HOMEBASE_INVITES_CREATE_KEY
+    list_usage="usage: ./invites.sh list [--owner <identity>]"
     query=""
     case "${1:-}" in
       "") ;;
-      --owner) [[ -n "${2:-}" ]] || { echo "usage: ./invites.sh list [--owner <identity>]" >&2; exit 1; }
+      --owner) [[ -n "${2:-}" ]] || die "$list_usage"
                query="?owner=$(printf '%s' "$2" | jq -sRr @uri 2>/dev/null || printf '%s' "$2")" ;;
-      *) echo "usage: ./invites.sh list [--owner <identity>]" >&2; exit 1 ;;
+      *) die "$list_usage" ;;
     esac
-    call GET "/$query" "$HOMEBASE_INVITES_CREATE_KEY"
+    call GET "/$query"
     ;;
   stats)
-    need HOMEBASE_INVITES_CREATE_KEY
     stats_usage="usage: ./invites.sh stats [--since <days>] [--json]"
     query=""; as_json=false
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --since) [[ "${2:-}" =~ ^[0-9]+$ && "$2" -ge 1 ]] || { echo "--since must be a number of days, e.g. --since 30" >&2; exit 1; }
+        --since) [[ "${2:-}" =~ ^[0-9]+$ && "$2" -ge 1 ]] || die "--since must be a number of days, e.g. --since 30"
                  query="?sinceDays=$2"; shift 2 ;;
         --json) as_json=true; shift ;;
-        *) echo "unknown option: $1" >&2; echo "$stats_usage" >&2; exit 1 ;;
+        *) die "unknown option: $1" "$stats_usage" ;;
       esac
     done
     if [[ "$as_json" == true ]] || ! command -v jq >/dev/null; then
-      call GET "/stats$query" "$HOMEBASE_INVITES_CREATE_KEY"
+      call GET "/stats$query"
       exit 0
     fi
-    response="$(curl -sS -H "Odin-Api-Key: $HOMEBASE_INVITES_CREATE_KEY" -w '\n%{http_code}' "$API/stats$query")"
+    response="$(call GET "/stats$query")"
     status="${response##*$'\n'}"; body="${response%$'\n'*}"
-    [[ "$status" == 200 ]] || { printf '%s\n[%s]\n' "$body" "$status"; exit 1; }
+    [[ "$status" == "[200]" ]] || { printf '%s\n%s\n' "$body" "$status"; exit 1; }
     printf '%s' "$body" | jq -r '
       def left(n): tostring | . + (" " * ([n - length, 0] | max));
       def right(n): tostring | (" " * ([n - length, 0] | max)) + .;
@@ -209,41 +215,34 @@ case "$cmd" in
         "codes: \(.neverUsed) never used, \(.usedUp) used up, \(.disabled) disabled"'
     ;;
   edit)
-    need HOMEBASE_INVITES_CREATE_KEY
     edit_usage="usage: ./invites.sh edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner] [--public-page | --no-public-page]"
-    code="$(path_code "${1:-}")" || { echo "$edit_usage" >&2; exit 1; }
+    code="$(path_code "${1:-}")" || die "$edit_usage"
     shift
     fields=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --uses) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "--uses must be a number, e.g. --uses 5" >&2; exit 1; }
-                fields+=("\"maxUses\":$2"); shift 2 ;;
-        --source) [[ -n "${2:-}" ]] || { echo "$edit_usage" >&2; exit 1; }
-                  fields+=("\"source\":\"$(json_string "$2")\""); shift 2 ;;
-        --owner) [[ -n "${2:-}" ]] || { echo "$edit_usage" >&2; exit 1; }
-                 fields+=("\"owner\":\"$(json_string "$2")\""); shift 2 ;;
+        --uses) check_uses "${2:-}"; fields+=("\"maxUses\":$2"); shift 2 ;;
+        --source) [[ -n "${2:-}" ]] || die "$edit_usage"
+                  fields+=("\"source\":$(json_string "$2")"); shift 2 ;;
+        --owner) [[ -n "${2:-}" ]] || die "$edit_usage"
+                 fields+=("\"owner\":$(json_string "$2")"); shift 2 ;;
         --no-owner) fields+=("\"owner\":\"\""); shift ;;
         --public-page) fields+=("\"enablePublicWebPresence\":true"); shift ;;
         --no-public-page) fields+=("\"enablePublicWebPresence\":false"); shift ;;
-        *) echo "unknown option: $1" >&2; echo "$edit_usage" >&2; exit 1 ;;
+        *) die "unknown option: $1" "$edit_usage" ;;
       esac
     done
-    [[ ${#fields[@]} -gt 0 ]] || { echo "nothing to change" >&2; echo "$edit_usage" >&2; exit 1; }
-    call PATCH "/$code" "$HOMEBASE_INVITES_CREATE_KEY" "{$(IFS=,; echo "${fields[*]}")}"
+    [[ ${#fields[@]} -gt 0 ]] || die "nothing to change" "$edit_usage"
+    call PATCH "/$code" "{$(IFS=,; echo "${fields[*]}")}"
     ;;
   disable|enable)
-    need HOMEBASE_INVITES_CREATE_KEY
-    code="$(path_code "${1:-}")" || { echo "usage: ./invites.sh $cmd <code>" >&2; exit 1; }
+    code="$(path_code "${1:-}")" || die "usage: ./invites.sh $cmd <code>"
     disabled=false; [[ "$cmd" == disable ]] && disabled=true
-    call PATCH "/$code" "$HOMEBASE_INVITES_CREATE_KEY" "{\"disabled\":$disabled}"
+    call PATCH "/$code" "{\"disabled\":$disabled}"
     ;;
-  validate|use)
-    need HOMEBASE_INVITES_SIGNUP_KEY
-    call POST "/$cmd" "$HOMEBASE_INVITES_SIGNUP_KEY" "$(code_body "${1:?code is required}")"
-    ;;
-  undo)
-    need HOMEBASE_INVITES_SIGNUP_KEY
-    call POST /undo-use "$HOMEBASE_INVITES_SIGNUP_KEY" "$(code_body "${1:?code is required}")"
+  validate|use|undo)
+    path="/$cmd"; [[ "$cmd" == undo ]] && path=/undo-use
+    call POST "$path" "$(code_body "${1:?code is required}")"
     ;;
   *)
     usage

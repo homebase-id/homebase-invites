@@ -1,26 +1,13 @@
 namespace Odin.InvitationCodes.Hosting.Tests;
 
-public class InvitationCodeStatsTests
+public class InvitationCodeStatsTests : StoreTestBase
 {
-    private TempInvitationCodeStore _temp = null!;
-    private InvitationCodeStore _store = null!;
-
-    [SetUp]
-    public void SetUp()
-    {
-        _temp = new TempInvitationCodeStore();
-        _store = _temp.Store;
-    }
-
-    [TearDown]
-    public void TearDown() => _temp.Dispose();
-
     private async Task<InvitationCode> CreateAndUse(string source, string? owner, int maxUses, int uses)
     {
-        var code = await _store.CreateAsync(owner, maxUses, source, enablePublicWebPresence: true);
+        var code = await Store.CreateAsync(owner, maxUses, source, enablePublicWebPresence: true);
         for (var i = 0; i < uses; i++)
         {
-            Assert.That(await _store.TryUseAsync(code.Code), Is.Not.Null);
+            Assert.That(await Store.TryUseAsync(code.Code), Is.Not.Null);
         }
         return code;
     }
@@ -28,7 +15,7 @@ public class InvitationCodeStatsTests
     [Test]
     public async Task AnEmptyStoreHasNothingToCount()
     {
-        var stats = await _store.StatsAsync(null);
+        var stats = await Store.StatsAsync(null);
 
         Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 0, 0, 0)));
         Assert.That((stats.NeverUsed, stats.UsedUp, stats.Disabled), Is.EqualTo((0, 0, 0)));
@@ -43,9 +30,9 @@ public class InvitationCodeStatsTests
         await CreateAndUse("spring", "frodo.dotyou.cloud", maxUses: 2, uses: 2);
         await CreateAndUse("spring", owner: null, maxUses: 1, uses: 1);
         var unused = await CreateAndUse("booth", "sam.dotyou.cloud", maxUses: 3, uses: 0);
-        await _store.UpdateAsync(unused.Code, new InvitationCodeChange(Disabled: true));
+        await Store.UpdateAsync(unused.Code, new InvitationCodeChange(Disabled: true));
 
-        var stats = await _store.StatsAsync(null);
+        var stats = await Store.StatsAsync(null);
 
         Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 3, 6, 3)));
         Assert.That((stats.NeverUsed, stats.UsedUp, stats.Disabled), Is.EqualTo((1, 2, 1)));
@@ -67,9 +54,9 @@ public class InvitationCodeStatsTests
     {
         var code = await CreateAndUse("spring", "frodo.dotyou.cloud", maxUses: 2, uses: 2);
         var now = DateTimeOffset.UtcNow;
-        await _temp.SetUsedAtAsync(code.Code, now.AddDays(-40), now.AddDays(-1));
+        await Temp.SetUsedAtAsync(code.Code, now.AddDays(-40), now.AddDays(-1));
 
-        var stats = await _store.StatsAsync(now.AddDays(-30).ToUnixTimeMilliseconds());
+        var stats = await Store.StatsAsync(now.AddDays(-30).ToUnixTimeMilliseconds());
 
         Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 1, 2, 1)));
         Assert.That(stats.BySource.Single().Signups, Is.EqualTo(1));
@@ -82,13 +69,13 @@ public class InvitationCodeStatsTests
     public async Task SignupsAreGroupedByTheWeekStartingMonday()
     {
         var code = await CreateAndUse("spring", null, maxUses: 4, uses: 4);
-        await _temp.SetUsedAtAsync(code.Code,
+        await Temp.SetUsedAtAsync(code.Code,
             Utc(2026, 10, 12), // Monday
             Utc(2026, 10, 14), // Wednesday
             Utc(2026, 10, 18, 23), // Sunday, late
             Utc(2026, 10, 19)); // the next Monday
 
-        var stats = await _store.StatsAsync(null);
+        var stats = await Store.StatsAsync(null);
 
         Assert.That(stats.ByWeek, Is.EqualTo(new[]
         {

@@ -14,15 +14,7 @@ public static class InvitationCodeFormat
     private const int Length = 12;
     private const int GroupSize = 4;
 
-    public static string Generate()
-    {
-        var chars = new char[Length];
-        for (var i = 0; i < Length; i++)
-        {
-            chars[i] = Alphabet[RandomNumberGenerator.GetInt32(Alphabet.Length)];
-        }
-        return new string(chars);
-    }
+    public static string Generate() => RandomNumberGenerator.GetString(Alphabet, Length);
 
     /// <summary>
     /// The stored form of what someone typed, or null if it cannot be a code.
@@ -60,17 +52,6 @@ public static class InvitationCodeFormat
         return sb.Length == Length ? sb.ToString() : null;
     }
 
-    public static string Display(string code)
-    {
-        var sb = new StringBuilder(code.Length + code.Length / GroupSize);
-        for (var i = 0; i < code.Length; i++)
-        {
-            if (i > 0 && i % GroupSize == 0)
-            {
-                sb.Append('-');
-            }
-            sb.Append(code[i]);
-        }
-        return sb.ToString();
-    }
+    public static string Display(string code) =>
+        string.Join('-', code.Chunk(GroupSize).Select(group => new string(group)));
 }
