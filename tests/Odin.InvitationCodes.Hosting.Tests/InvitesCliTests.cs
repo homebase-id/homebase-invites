@@ -123,18 +123,19 @@ public class InvitesCliTests
     [Test]
     public async Task CreateWithoutAnOwnerGivesAPublicPageByDefault()
     {
-        var code = (await RunAsync("create", "--uses", "1", "--source", "booth")).Json<InvitationCode>();
+        var code = (await RunAsync("create", "--uses", "1", "--source", "booth", "--plan", "free")).Json<InvitationCode>();
 
         Assert.That(code.Owner, Is.Null);
         Assert.That(code.EnablePublicWebPresence, Is.True);
-        Assert.That(code.PlanId, Is.Null);
+        Assert.That(code.PlanId, Is.EqualTo("free"));
     }
 
-    [TestCase(new[] { "--source", "x" }, "usage: ./invites.sh create", TestName = "create without --uses")]
-    [TestCase(new[] { "--uses", "1" }, "usage: ./invites.sh create", TestName = "create without --source")]
-    [TestCase(new[] { "--uses", "five", "--source", "x" }, "--uses must be a number", TestName = "create with a non-number")]
+    [TestCase(new[] { "--source", "x", "--plan", "free" }, "usage: ./invites.sh create", TestName = "create without --uses")]
+    [TestCase(new[] { "--uses", "1", "--plan", "free" }, "usage: ./invites.sh create", TestName = "create without --source")]
+    [TestCase(new[] { "--uses", "1", "--source", "x" }, "usage: ./invites.sh create", TestName = "create without --plan")]
+    [TestCase(new[] { "--uses", "five", "--source", "x", "--plan", "free" }, "--uses must be a number", TestName = "create with a non-number")]
     [TestCase(new[] { "--uses", "1", "--source", "x", "--plan" }, "usage: ./invites.sh create", TestName = "create with --plan and no plan")]
-    [TestCase(new[] { "--uses", "1", "--source", "x", "--bogus" }, "unknown option: --bogus", TestName = "create with an unknown option")]
+    [TestCase(new[] { "--uses", "1", "--source", "x", "--plan", "free", "--bogus" }, "unknown option: --bogus", TestName = "create with an unknown option")]
     public async Task CreateRefusesBadArguments(string[] arguments, string message)
     {
         var result = await RunAsync(["create", .. arguments]);
@@ -146,7 +147,7 @@ public class InvitesCliTests
     [Test]
     public async Task TheServicesRefusalIsShownWithItsStatus()
     {
-        var result = await RunAsync("create", "--uses", "1", "--source", "x", "--owner", "not-a-domain");
+        var result = await RunAsync("create", "--uses", "1", "--source", "x", "--plan", "free", "--owner", "not-a-domain");
 
         Assert.That(result.Status, Is.EqualTo(400));
         Assert.That(result.Output, Does.Contain("Invalid owner"));
@@ -181,8 +182,7 @@ public class InvitesCliTests
         var planned = (await RunAsync("edit", code.Code, "--plan", "pro-100gb")).Json<InvitationCode>();
         Assert.That(planned, Is.EqualTo(reowned with { PlanId = "pro-100gb" }));
 
-        var planless = (await RunAsync("edit", code.Code, "--no-plan")).Json<InvitationCode>();
-        Assert.That(planless, Is.EqualTo(reowned));
+        Assert.That((await RunAsync("edit", code.Code, "--no-plan")).Error, Does.Contain("unknown option: --no-plan"));
     }
 
     [Test]
@@ -281,16 +281,12 @@ public class InvitesCliTests
     //
 
     private async Task<InvitationCode> CreateAsync(int maxUses = 2, string? owner = null, string source = "cli-test",
-        string? planId = null)
+        string planId = "free")
     {
-        List<string> arguments = ["create", "--uses", maxUses.ToString(), "--source", source];
+        List<string> arguments = ["create", "--uses", maxUses.ToString(), "--source", source, "--plan", planId];
         if (owner != null)
         {
             arguments.AddRange(["--owner", owner]);
-        }
-        if (planId != null)
-        {
-            arguments.AddRange(["--plan", planId]);
         }
         var result = await RunAsync(arguments.ToArray());
         Assert.That(result.Status, Is.EqualTo(200), result.Output + result.Error);

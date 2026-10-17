@@ -32,15 +32,14 @@ CHECK THE SERVICE
       Prints "pong" if the service is up.
 
 CREATE AND LIST CODES  (create key)
-  create --uses <n> --source <text> [--owner <identity>] [--plan <plan id>] [--no-public-page]
+  create --uses <n> --source <text> --plan <plan id> [--owner <identity>] [--no-public-page]
       Makes a new code and prints it.
         --uses <n>             required: how many people can sign up with it (1-10000)
         --source <text>        required: free text noting where the code came from,
                                e.g. --source "spring campaign"
         --owner <identity>     optional: the identity the code belongs to, e.g. frodo.demo.rocks
-        --plan <plan id>       optional: the hosting plan, and so the quota, people who sign up
-                               with this code get, e.g. --plan pro-100gb. Without it, the
-                               identity host picks the plan.
+        --plan <plan id>       required: the hosting plan, and so the quota, people who sign up
+                               with this code get, e.g. --plan pro-100gb
         --no-public-page       optional: people who sign up with this code do NOT get a public
                                home page on their identity. Without it, they do.
 
@@ -58,7 +57,7 @@ SEE HOW CODES ARE DOING  (create key)
 
 CHANGE A CODE  (create key)
   edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner]
-              [--plan <plan id> | --no-plan] [--public-page | --no-public-page]
+              [--plan <plan id>] [--public-page | --no-public-page]
       Changes only what you give; everything else stays as it is.
         --uses <n>          the new total number of signups allowed (1-10000). Uses already taken
                             still count, so lowering it below them leaves none left.
@@ -66,7 +65,6 @@ CHANGE A CODE  (create key)
         --owner <identity>  give the code to this identity
         --no-owner          take the code away from its owner
         --plan <plan id>    people who sign up with it from now on get this hosting plan
-        --no-plan           leave the plan to the identity host
         --public-page       people who sign up with it get a public home page
         --no-public-page    they do not
 
@@ -84,14 +82,11 @@ TEST A CODE  (signup key; odin-core does these during a real signup)
       Gives back the code's most recent use.
 
 EXAMPLES
-  ./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks
-      5 signups, owned by frodo, new identities get a public home page
+  ./invites.sh create --uses 5 --source "spring campaign" --plan free --owner frodo.demo.rocks
+      5 signups on the free plan, owned by frodo, new identities get a public home page
 
-  ./invites.sh create --uses 10 --source "conference booth" --no-public-page
-      10 signups, no owner, no public home page
-
-  ./invites.sh create --uses 3 --source "beta testers" --plan pro-100gb
-      3 signups, each on the pro-100gb plan
+  ./invites.sh create --uses 10 --source "conference booth" --plan pro-100gb --no-public-page
+      10 signups on the pro-100gb plan, no owner, no public home page
 
   ./invites.sh list --owner frodo.demo.rocks
 
@@ -154,23 +149,23 @@ case "$cmd" in
     curl -sS -w '\n[%{http_code}]\n' "$URL/ping"
     ;;
   create)
-    create_usage="usage: ./invites.sh create --uses <n> --source <text> [--owner <identity>] [--plan <plan id>] [--no-public-page]  (see ./invites.sh help)"
-    uses=""; source_text=""; owner_json=null; plan_json=null; public_page=true
+    create_usage="usage: ./invites.sh create --uses <n> --source <text> --plan <plan id> [--owner <identity>] [--no-public-page]  (see ./invites.sh help)"
+    uses=""; source_text=""; plan_id=""; owner_json=null; public_page=true
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --uses) uses="${2:-}"; shift 2 ;;
         --source) source_text="${2:-}"; shift 2 ;;
         --owner) [[ -n "${2:-}" ]] && owner_json="$(json_string "$2")"; shift 2 ;;
         --plan) [[ -n "${2:-}" ]] || die "$create_usage"
-                plan_json="$(json_string "$2")"; shift 2 ;;
+                plan_id="$2"; shift 2 ;;
         --no-public-page) public_page=false; shift ;;
         *) die "unknown option: $1" "$create_usage" ;;
       esac
     done
-    [[ -n "$uses" && -n "$source_text" ]] || die "$create_usage"
+    [[ -n "$uses" && -n "$source_text" && -n "$plan_id" ]] || die "$create_usage"
     check_uses "$uses"
     call POST / \
-      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":$(json_string "$source_text"),\"enablePublicWebPresence\":$public_page,\"planId\":$plan_json}"
+      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":$(json_string "$source_text"),\"enablePublicWebPresence\":$public_page,\"planId\":$(json_string "$plan_id")}"
     ;;
   list)
     list_usage="usage: ./invites.sh list [--owner <identity>]"
@@ -228,7 +223,7 @@ case "$cmd" in
         "codes: \(.neverUsed) never used, \(.usedUp) used up, \(.disabled) disabled"'
     ;;
   edit)
-    edit_usage="usage: ./invites.sh edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner] [--plan <plan id> | --no-plan] [--public-page | --no-public-page]"
+    edit_usage="usage: ./invites.sh edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner] [--plan <plan id>] [--public-page | --no-public-page]"
     code="$(path_code "${1:-}")" || die "$edit_usage"
     shift
     fields=()
@@ -242,7 +237,6 @@ case "$cmd" in
         --no-owner) fields+=("\"owner\":\"\""); shift ;;
         --plan) [[ -n "${2:-}" ]] || die "$edit_usage"
                 fields+=("\"planId\":$(json_string "$2")"); shift 2 ;;
-        --no-plan) fields+=("\"planId\":\"\""); shift ;;
         --public-page) fields+=("\"enablePublicWebPresence\":true"); shift ;;
         --no-public-page) fields+=("\"enablePublicWebPresence\":false"); shift ;;
         *) die "unknown option: $1" "$edit_usage" ;;

@@ -84,9 +84,10 @@ public class InvitationCodeApiTests
             new InvitationCode(created.Code, "frodo.dotyou.cloud", "spring", false, "pro-100gb", 3, 3, false)));
     }
 
-    [TestCase("not a domain", 1, null, TestName = "a bad owner")]
-    [TestCase("frodo.dotyou.cloud", 0, null, TestName = "no uses")]
-    [TestCase("frodo.dotyou.cloud", InvitationCodeStore.MaxUsesLimit + 1, null, TestName = "too many uses")]
+    [TestCase("not a domain", 1, "free", TestName = "a bad owner")]
+    [TestCase("frodo.dotyou.cloud", 0, "free", TestName = "no uses")]
+    [TestCase("frodo.dotyou.cloud", InvitationCodeStore.MaxUsesLimit + 1, "free", TestName = "too many uses")]
+    [TestCase("frodo.dotyou.cloud", 1, null, TestName = "no plan")]
     [TestCase("frodo.dotyou.cloud", 1, "pro 100gb", TestName = "a bad plan")]
     public async Task CreateRefuses(string owner, int maxUses, string? planId)
     {
@@ -176,8 +177,7 @@ public class InvitationCodeApiTests
         var planned = await PatchAsync(code.Code, new { planId = "pro-100gb" });
         Assert.That(planned, Is.EqualTo(reowned with { PlanId = "pro-100gb" }));
 
-        var planless = await PatchAsync(code.Code, new { planId = "" });
-        Assert.That(planless, Is.EqualTo(reowned));
+        Assert.That((await RawPatchAsync(code.Code, new { planId = "" })).StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
     [Test]
@@ -243,7 +243,7 @@ public class InvitationCodeApiTests
         Assert.That(stats.ByPlan, Is.EqualTo(new[]
         {
             new InvitationCodeStatsLine("pro-100gb", 1, 2, 1),
-            new InvitationCodeStatsLine(null, 1, 3, 0),
+            new InvitationCodeStatsLine("free", 1, 3, 0),
         }));
         Assert.That(stats.ByWeek.Single().Signups, Is.EqualTo(1));
     }

@@ -9,8 +9,8 @@ namespace Odin.InvitationCodes.Hosting;
 /// <param name="Owner">The identity the code belongs to, if any</param>
 /// <param name="Source">Free text saying where the code came from</param>
 /// <param name="EnablePublicWebPresence">Whether an identity that signs up with the code gets a public home page</param>
-/// <param name="PlanId">The hosting plan (and so the quota) an identity that signs up with the code gets; null leaves
-/// it to the identity host</param>
+/// <param name="PlanId">The hosting plan (and so the quota) an identity that signs up with the code gets. Every code
+/// is made with one; null only on codes made before plans were required, which leave it to the identity host</param>
 /// <param name="Disabled">A disabled code cannot be used, whatever uses it has left</param>
 public record InvitationCode(
     string Code,
@@ -23,7 +23,8 @@ public record InvitationCode(
     bool Disabled);
 
 /// <summary>
-/// A change to a code; null leaves a field as it is. An empty <see cref="Owner"/> or <see cref="PlanId"/> removes it.
+/// A change to a code; null leaves a field as it is. An empty <see cref="Owner"/> removes the owner; a plan can be
+/// changed but not removed.
 /// </summary>
 public record InvitationCodeChange(
     int? MaxUses = null,
@@ -94,7 +95,7 @@ public class InvitationCodeStore
     //
 
     public async Task<InvitationCode> CreateAsync(string? owner, int maxUses, string? source, bool enablePublicWebPresence,
-        string? planId = null)
+        string? planId)
     {
         CheckMaxUses(maxUses);
         var normalizedOwner = owner == null ? null : NormalizeOwner(owner);
@@ -115,7 +116,7 @@ public class InvitationCodeStore
             command.Parameters.AddWithValue("@owner", (object?)normalizedOwner ?? DBNull.Value);
             command.Parameters.AddWithValue("@source", normalizedSource);
             command.Parameters.AddWithValue("@enablePublicWebPresence", enablePublicWebPresence);
-            command.Parameters.AddWithValue("@planId", (object?)normalizedPlanId ?? DBNull.Value);
+            command.Parameters.AddWithValue("@planId", normalizedPlanId);
             command.Parameters.AddWithValue("@maxUses", maxUses);
             command.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             try
@@ -272,7 +273,7 @@ public class InvitationCodeStore
         if (change.PlanId != null)
         {
             sets.Add("plan_id = @planId");
-            command.Parameters.AddWithValue("@planId", (object?)NormalizePlanId(change.PlanId) ?? DBNull.Value);
+            command.Parameters.AddWithValue("@planId", NormalizePlanId(change.PlanId));
         }
         if (change.Disabled != null)
         {
@@ -425,13 +426,12 @@ public class InvitationCodeStore
         return normalized;
     }
 
-    // Null or blank is no plan
-    private static string? NormalizePlanId(string? planId)
+    private static string NormalizePlanId(string? planId)
     {
         var normalized = planId?.Trim();
         if (string.IsNullOrEmpty(normalized))
         {
-            return null;
+            throw new InvalidInvitationCodeRequestException("planId is required");
         }
         if (!PlanIdFormat.IsMatch(normalized))
         {
