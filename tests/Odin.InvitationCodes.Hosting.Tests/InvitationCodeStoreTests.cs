@@ -22,7 +22,8 @@ public class InvitationCodeStoreTests : StoreTestBase
     [Test]
     public async Task AUseReturnsWhatTheCodeCarries()
     {
-        var created = await Store.CreateAsync("Frodo.DotYou.Cloud", 3, "  spring campaign ", enablePublicWebPresence: false);
+        var created = await Store.CreateAsync("Frodo.DotYou.Cloud", 3, "  spring campaign ", enablePublicWebPresence: false,
+            planId: " pro-100gb ");
 
         var used = await Store.TryUseAsync(created.Code);
 
@@ -30,6 +31,16 @@ public class InvitationCodeStoreTests : StoreTestBase
         Assert.That(used!.Owner, Is.EqualTo("frodo.dotyou.cloud"));
         Assert.That(used.Source, Is.EqualTo("spring campaign"));
         Assert.That(used.EnablePublicWebPresence, Is.False);
+        Assert.That(used.PlanId, Is.EqualTo("pro-100gb"));
+    }
+
+    [Test]
+    public async Task ACodeNeedNotHaveAPlan()
+    {
+        var created = await Create(1);
+
+        Assert.That(created.PlanId, Is.Null);
+        Assert.That((await Store.TryUseAsync(created.Code))!.PlanId, Is.Null);
     }
 
     [Test]
@@ -113,6 +124,10 @@ public class InvitationCodeStoreTests : StoreTestBase
         Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => Create(1, owner: "not a domain"));
         Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => Create(0));
         Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => Store.ListAsync("not a domain"));
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            Store.CreateAsync(null, 1, "test", true, planId: "not a plan"));
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            Store.CreateAsync(null, 1, "test", true, planId: new string('x', 65)));
     }
 
     [Test]
@@ -156,6 +171,19 @@ public class InvitationCodeStoreTests : StoreTestBase
     }
 
     [Test]
+    public async Task EditCanChangeOrRemoveThePlan()
+    {
+        var created = await Create(2);
+
+        var planned = await Store.UpdateAsync(created.Code, new InvitationCodeChange(PlanId: "pro-100gb"));
+        Assert.That(planned, Is.EqualTo(created with { PlanId = "pro-100gb" }));
+        Assert.That((await Store.TryUseAsync(created.Code))!.PlanId, Is.EqualTo("pro-100gb"));
+
+        var removed = await Store.UpdateAsync(created.Code, new InvitationCodeChange(PlanId: " "));
+        Assert.That(removed!.PlanId, Is.Null);
+    }
+
+    [Test]
     public async Task LoweringMaxUsesBelowTheUsesTakenLeavesNone()
     {
         var created = await Create(3);
@@ -180,10 +208,12 @@ public class InvitationCodeStoreTests : StoreTestBase
             Store.UpdateAsync(created.Code, new InvitationCodeChange(MaxUses: 0)));
         Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
             Store.UpdateAsync(created.Code, new InvitationCodeChange(Owner: "not a domain")));
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            Store.UpdateAsync(created.Code, new InvitationCodeChange(PlanId: "pro/100gb")));
     }
 
     [Test]
-    public async Task ADatabaseFromBeforeDisablingIsUpgraded()
+    public async Task ADatabaseFromBeforeDisablingAndPlansIsUpgraded()
     {
         using var old = new TempInvitationCodeStore();
         await using (var connection = new SqliteConnection($"Data Source={old.Path}"))
@@ -201,7 +231,9 @@ public class InvitationCodeStoreTests : StoreTestBase
         }
 
         Assert.That(await old.Store.GetAsync("K7QX-M2PD-9FHW"), Is.EqualTo(
-            new InvitationCode("K7QX-M2PD-9FHW", null, "old", true, 2, 2, Disabled: false)));
+            new InvitationCode("K7QX-M2PD-9FHW", null, "old", true, PlanId: null, 2, 2, Disabled: false)));
         Assert.That(await old.Store.TryUseAsync("K7QX-M2PD-9FHW"), Is.Not.Null);
+        Assert.That((await old.Store.UpdateAsync("K7QX-M2PD-9FHW", new InvitationCodeChange(PlanId: "free")))!.PlanId,
+            Is.EqualTo("free"));
     }
 }

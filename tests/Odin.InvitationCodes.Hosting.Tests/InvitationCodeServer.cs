@@ -47,11 +47,11 @@ public sealed class InvitationCodeServer : WebApplicationFactory<Program>
     }
 
     public async Task<InvitationCode> CreateCodeAsync(int maxUses = 5, string? owner = "frodo.dotyou.cloud",
-        string source = "test", bool enablePublicWebPresence = true)
+        string source = "test", bool enablePublicWebPresence = true, string? planId = null)
     {
         using var client = ClientWithKey(CreateKey);
         var response = await client.PostAsJsonAsync(Root + "/",
-            new CreateRequest(owner, maxUses, source, enablePublicWebPresence));
+            new CreateRequest(owner, maxUses, source, enablePublicWebPresence, planId));
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<InvitationCode>())!;
     }

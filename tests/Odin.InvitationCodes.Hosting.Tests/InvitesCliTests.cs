@@ -113,11 +113,11 @@ public class InvitesCliTests
     public async Task CreateMakesACodeWithWhatItIsGiven()
     {
         var result = await RunAsync("create", "--uses", "4", "--source", "spring \"quoted\" campaign", "--owner",
-            "frodo.dotyou.cloud", "--no-public-page");
+            "frodo.dotyou.cloud", "--plan", "pro-100gb", "--no-public-page");
 
         Assert.That(result.Status, Is.EqualTo(200), result.Output);
         var code = result.Json<InvitationCode>();
-        Assert.That(code, Is.EqualTo(new InvitationCode(code.Code, "frodo.dotyou.cloud", "spring \"quoted\" campaign", false, 4, 4, false)));
+        Assert.That(code, Is.EqualTo(new InvitationCode(code.Code, "frodo.dotyou.cloud", "spring \"quoted\" campaign", false, "pro-100gb", 4, 4, false)));
     }
 
     [Test]
@@ -127,11 +127,13 @@ public class InvitesCliTests
 
         Assert.That(code.Owner, Is.Null);
         Assert.That(code.EnablePublicWebPresence, Is.True);
+        Assert.That(code.PlanId, Is.Null);
     }
 
     [TestCase(new[] { "--source", "x" }, "usage: ./invites.sh create", TestName = "create without --uses")]
     [TestCase(new[] { "--uses", "1" }, "usage: ./invites.sh create", TestName = "create without --source")]
     [TestCase(new[] { "--uses", "five", "--source", "x" }, "--uses must be a number", TestName = "create with a non-number")]
+    [TestCase(new[] { "--uses", "1", "--source", "x", "--plan" }, "usage: ./invites.sh create", TestName = "create with --plan and no plan")]
     [TestCase(new[] { "--uses", "1", "--source", "x", "--bogus" }, "unknown option: --bogus", TestName = "create with an unknown option")]
     public async Task CreateRefusesBadArguments(string[] arguments, string message)
     {
@@ -175,6 +177,12 @@ public class InvitesCliTests
         var reowned = (await RunAsync("edit", code.Code.ToLowerInvariant(), "--owner", "sam.dotyou.cloud", "--public-page"))
             .Json<InvitationCode>();
         Assert.That(reowned, Is.EqualTo(edited with { Owner = "sam.dotyou.cloud", EnablePublicWebPresence = true }));
+
+        var planned = (await RunAsync("edit", code.Code, "--plan", "pro-100gb")).Json<InvitationCode>();
+        Assert.That(planned, Is.EqualTo(reowned with { PlanId = "pro-100gb" }));
+
+        var planless = (await RunAsync("edit", code.Code, "--no-plan")).Json<InvitationCode>();
+        Assert.That(planless, Is.EqualTo(reowned));
     }
 
     [Test]

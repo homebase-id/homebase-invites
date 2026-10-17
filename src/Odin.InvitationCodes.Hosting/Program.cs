@@ -50,7 +50,8 @@ signup.MapPost("/undo-use", async (CodeRequest request) =>
 var admin = root.MapGroup("").AddEndpointFilter(InvitationCodeApi.RequireApiKey(createApiKey));
 
 admin.MapPost("/", async (CreateRequest request) =>
-    await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence));
+    await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence,
+        request.PlanId));
 
 admin.MapGet("/", async (string? owner) => await store.ListAsync(owner));
 
@@ -66,7 +67,7 @@ admin.MapGet("/stats", async (int? sinceDays) =>
     return await store.StatsAsync(since);
 });
 
-// Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" removes the owner.
+// Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" and "planId": "" remove them.
 admin.MapPatch("/{code}", async (string code, InvitationCodeChange change) =>
     await store.UpdateAsync(code, change) is { } updated ? Results.Ok(updated) : Results.NotFound());
 
@@ -79,7 +80,8 @@ string Required(string key)
 }
 
 public record CodeRequest(string? Code);
-public record CreateRequest(string? Owner, int MaxUses, string? Source, bool EnablePublicWebPresence);
+public record CreateRequest(string? Owner, int MaxUses, string? Source, bool EnablePublicWebPresence,
+    string? PlanId = null);
 public record ValidateResponse(bool Valid);
 public record UseResponse(bool Used, InvitationCode? Code);
 
