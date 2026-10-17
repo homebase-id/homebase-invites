@@ -32,12 +32,15 @@ CHECK THE SERVICE
       Prints "pong" if the service is up.
 
 CREATE AND LIST CODES  (create key)
-  create --uses <n> --source <text> [--owner <identity>] [--no-public-page]
+  create --uses <n> --source <text> [--owner <identity>] [--plan <plan id>] [--no-public-page]
       Makes a new code and prints it.
         --uses <n>             required: how many people can sign up with it (1-10000)
         --source <text>        required: free text noting where the code came from,
                                e.g. --source "spring campaign"
         --owner <identity>     optional: the identity the code belongs to, e.g. frodo.demo.rocks
+        --plan <plan id>       optional: the hosting plan, and so the quota, people who sign up
+                               with this code get, e.g. --plan pro-100gb. Without it, the
+                               identity host picks the plan.
         --no-public-page       optional: people who sign up with this code do NOT get a public
                                home page on their identity. Without it, they do.
 
@@ -47,7 +50,7 @@ CREATE AND LIST CODES  (create key)
 
 SEE HOW CODES ARE DOING  (create key)
   stats [--since <days>] [--json]
-      Counts codes and signups: in total, by source, by owner, and per week.
+      Counts codes and signups: in total, by source, by owner, by plan, and per week.
         --since <days>      count only signups from the last <days> days. The code counts
                             (codes, uses allowed, never used, used up, disabled) are always
                             about every code as it is now.
@@ -55,13 +58,15 @@ SEE HOW CODES ARE DOING  (create key)
 
 CHANGE A CODE  (create key)
   edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner]
-              [--public-page | --no-public-page]
+              [--plan <plan id> | --no-plan] [--public-page | --no-public-page]
       Changes only what you give; everything else stays as it is.
         --uses <n>          the new total number of signups allowed (1-10000). Uses already taken
                             still count, so lowering it below them leaves none left.
         --source <text>     new note on where the code came from
         --owner <identity>  give the code to this identity
         --no-owner          take the code away from its owner
+        --plan <plan id>    people who sign up with it from now on get this hosting plan
+        --no-plan           leave the plan to the identity host
         --public-page       people who sign up with it get a public home page
         --no-public-page    they do not
 
@@ -85,10 +90,13 @@ EXAMPLES
   ./invites.sh create --uses 10 --source "conference booth" --no-public-page
       10 signups, no owner, no public home page
 
+  ./invites.sh create --uses 3 --source "beta testers" --plan pro-100gb
+      3 signups, each on the pro-100gb plan
+
   ./invites.sh list --owner frodo.demo.rocks
 
   ./invites.sh stats --since 30
-      signups in the last 30 days, by source, owner and week
+      signups in the last 30 days, by source, owner, plan and week
 
   ./invites.sh edit K7QX-M2PD-9FHW --uses 20 --no-public-page
       allow 20 signups in total, and no public home page from now on
@@ -146,13 +154,15 @@ case "$cmd" in
     curl -sS -w '\n[%{http_code}]\n' "$URL/ping"
     ;;
   create)
-    create_usage="usage: ./invites.sh create --uses <n> --source <text> [--owner <identity>] [--no-public-page]  (see ./invites.sh help)"
-    uses=""; source_text=""; owner_json=null; public_page=true
+    create_usage="usage: ./invites.sh create --uses <n> --source <text> [--owner <identity>] [--plan <plan id>] [--no-public-page]  (see ./invites.sh help)"
+    uses=""; source_text=""; owner_json=null; plan_json=null; public_page=true
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --uses) uses="${2:-}"; shift 2 ;;
         --source) source_text="${2:-}"; shift 2 ;;
         --owner) [[ -n "${2:-}" ]] && owner_json="$(json_string "$2")"; shift 2 ;;
+        --plan) [[ -n "${2:-}" ]] || die "$create_usage"
+                plan_json="$(json_string "$2")"; shift 2 ;;
         --no-public-page) public_page=false; shift ;;
         *) die "unknown option: $1" "$create_usage" ;;
       esac
@@ -160,7 +170,7 @@ case "$cmd" in
     [[ -n "$uses" && -n "$source_text" ]] || die "$create_usage"
     check_uses "$uses"
     call POST / \
-      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":$(json_string "$source_text"),\"enablePublicWebPresence\":$public_page}"
+      "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":$(json_string "$source_text"),\"enablePublicWebPresence\":$public_page,\"planId\":$plan_json}"
     ;;
   list)
     list_usage="usage: ./invites.sh list [--owner <identity>]"
@@ -207,6 +217,9 @@ case "$cmd" in
         "by owner",
         (if (.byOwner | length) == 0 then "  (no code has an owner)" else (.byOwner[] | row(.name)) end),
         "",
+        "by plan",
+        (.byPlan[] | row(.name // "(no plan)")),
+        "",
         "signups per week, from Monday",
         (if (.byWeek | length) == 0 then "  (none)"
          else (.byWeek[] | "  " + .week + (.signups | right(6)) + "  " + ("#" * ((.signups * 40 / $most) | ceil) // ""))
@@ -215,7 +228,7 @@ case "$cmd" in
         "codes: \(.neverUsed) never used, \(.usedUp) used up, \(.disabled) disabled"'
     ;;
   edit)
-    edit_usage="usage: ./invites.sh edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner] [--public-page | --no-public-page]"
+    edit_usage="usage: ./invites.sh edit <code> [--uses <n>] [--source <text>] [--owner <identity> | --no-owner] [--plan <plan id> | --no-plan] [--public-page | --no-public-page]"
     code="$(path_code "${1:-}")" || die "$edit_usage"
     shift
     fields=()
@@ -227,6 +240,9 @@ case "$cmd" in
         --owner) [[ -n "${2:-}" ]] || die "$edit_usage"
                  fields+=("\"owner\":$(json_string "$2")"); shift 2 ;;
         --no-owner) fields+=("\"owner\":\"\""); shift ;;
+        --plan) [[ -n "${2:-}" ]] || die "$edit_usage"
+                fields+=("\"planId\":$(json_string "$2")"); shift 2 ;;
+        --no-plan) fields+=("\"planId\":\"\""); shift ;;
         --public-page) fields+=("\"enablePublicWebPresence\":true"); shift ;;
         --no-public-page) fields+=("\"enablePublicWebPresence\":false"); shift ;;
         *) die "unknown option: $1" "$edit_usage" ;;

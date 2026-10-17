@@ -77,18 +77,20 @@ public class InvitationCodeApiTests
     public async Task ACreatedCodeIsReturnedInDisplayFormWithAllItsUses()
     {
         var created = await _server.CreateCodeAsync(maxUses: 3, owner: "Frodo.DotYou.Cloud", source: " spring ",
-            enablePublicWebPresence: false);
+            enablePublicWebPresence: false, planId: "pro-100gb");
 
         Assert.That(created.Code, Does.Match("^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$"));
-        Assert.That(created, Is.EqualTo(new InvitationCode(created.Code, "frodo.dotyou.cloud", "spring", false, 3, 3, false)));
+        Assert.That(created, Is.EqualTo(
+            new InvitationCode(created.Code, "frodo.dotyou.cloud", "spring", false, "pro-100gb", 3, 3, false)));
     }
 
-    [TestCase("not a domain", 1, TestName = "a bad owner")]
-    [TestCase("frodo.dotyou.cloud", 0, TestName = "no uses")]
-    [TestCase("frodo.dotyou.cloud", InvitationCodeStore.MaxUsesLimit + 1, TestName = "too many uses")]
-    public async Task CreateRefuses(string owner, int maxUses)
+    [TestCase("not a domain", 1, null, TestName = "a bad owner")]
+    [TestCase("frodo.dotyou.cloud", 0, null, TestName = "no uses")]
+    [TestCase("frodo.dotyou.cloud", InvitationCodeStore.MaxUsesLimit + 1, null, TestName = "too many uses")]
+    [TestCase("frodo.dotyou.cloud", 1, "pro 100gb", TestName = "a bad plan")]
+    public async Task CreateRefuses(string owner, int maxUses, string? planId)
     {
-        var response = await _admin.PostAsJsonAsync(Root + "/", new CreateRequest(owner, maxUses, "x", true));
+        var response = await _admin.PostAsJsonAsync(Root + "/", new CreateRequest(owner, maxUses, "x", true, planId));
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
@@ -119,6 +121,14 @@ public class InvitationCodeApiTests
         Assert.That(await UseAsync(code.Code), Is.EqualTo(new UseResponse(true, code with { UsesLeft = 0 })));
         Assert.That(await ValidateAsync(code.Code), Is.False);
         Assert.That(await UseAsync(code.Code), Is.EqualTo(new UseResponse(false, null)));
+    }
+
+    [Test]
+    public async Task AUseCarriesTheCodesPlan()
+    {
+        var code = await _server.CreateCodeAsync(planId: "pro-100gb");
+
+        Assert.That((await UseAsync(code.Code)).Code!.PlanId, Is.EqualTo("pro-100gb"));
     }
 
     [Test]
@@ -162,6 +172,12 @@ public class InvitationCodeApiTests
 
         var reowned = await PatchAsync(code.Code, new { owner = "Sam.DotYou.Cloud" });
         Assert.That(reowned!.Owner, Is.EqualTo("sam.dotyou.cloud"));
+
+        var planned = await PatchAsync(code.Code, new { planId = "pro-100gb" });
+        Assert.That(planned, Is.EqualTo(reowned with { PlanId = "pro-100gb" }));
+
+        var planless = await PatchAsync(code.Code, new { planId = "" });
+        Assert.That(planless, Is.EqualTo(reowned));
     }
 
     [Test]
@@ -208,7 +224,8 @@ public class InvitationCodeApiTests
     [Test]
     public async Task StatsCountCodesAndSignups()
     {
-        var code = await _server.CreateCodeAsync(maxUses: 2, owner: "frodo.dotyou.cloud", source: "spring");
+        var code = await _server.CreateCodeAsync(maxUses: 2, owner: "frodo.dotyou.cloud", source: "spring",
+            planId: "pro-100gb");
         await _server.CreateCodeAsync(maxUses: 3, owner: null, source: "booth");
         await UseAsync(code.Code);
 
@@ -223,6 +240,11 @@ public class InvitationCodeApiTests
             new InvitationCodeStatsLine("booth", 1, 3, 0),
         }));
         Assert.That(stats.ByOwner, Is.EqualTo(new[] { new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 1) }));
+        Assert.That(stats.ByPlan, Is.EqualTo(new[]
+        {
+            new InvitationCodeStatsLine("pro-100gb", 1, 2, 1),
+            new InvitationCodeStatsLine(null, 1, 3, 0),
+        }));
         Assert.That(stats.ByWeek.Single().Signups, Is.EqualTo(1));
     }
 

@@ -9,28 +9,32 @@ namespace Odin.InvitationCodes.Hosting;
 /// <param name="Owner">The identity the code belongs to, if any</param>
 /// <param name="Source">Free text saying where the code came from</param>
 /// <param name="EnablePublicWebPresence">Whether an identity that signs up with the code gets a public home page</param>
+/// <param name="PlanId">The hosting plan (and so the quota) an identity that signs up with the code gets; null leaves
+/// it to the identity host</param>
 /// <param name="Disabled">A disabled code cannot be used, whatever uses it has left</param>
 public record InvitationCode(
     string Code,
     string? Owner,
     string Source,
     bool EnablePublicWebPresence,
+    string? PlanId,
     int MaxUses,
     int UsesLeft,
     bool Disabled);
 
 /// <summary>
-/// A change to a code; null leaves a field as it is. An empty <see cref="Owner"/> removes the owner.
+/// A change to a code; null leaves a field as it is. An empty <see cref="Owner"/> or <see cref="PlanId"/> removes it.
 /// </summary>
 public record InvitationCodeChange(
     int? MaxUses = null,
     string? Source = null,
     string? Owner = null,
     bool? EnablePublicWebPresence = null,
+    string? PlanId = null,
     bool? Disabled = null);
 
 /// <summary>
-/// A request the store refuses: a bad owner or number of uses. The API answers 400.
+/// A request the store refuses: a bad owner, plan or number of uses. The API answers 400.
 /// </summary>
 public class InvalidInvitationCodeRequestException(string message) : Exception(message);
 
@@ -47,9 +51,10 @@ public record InvitationCodeStats(
     int Disabled,
     List<InvitationCodeStatsLine> BySource,
     List<InvitationCodeStatsLine> ByOwner,
+    List<InvitationCodeStatsLine> ByPlan,
     List<WeeklySignups> ByWeek);
 
-/// <param name="Name">The source or owner the line is for; null on the totals</param>
+/// <param name="Name">The source, owner or plan the line is for; null on the totals and on codes without a plan</param>
 /// <param name="UsesAllowed">The codes' MaxUses added up</param>
 public record InvitationCodeStatsLine(string? Name, int Codes, int UsesAllowed, int Signups);
 
@@ -88,11 +93,13 @@ public class InvitationCodeStore
 
     //
 
-    public async Task<InvitationCode> CreateAsync(string? owner, int maxUses, string? source, bool enablePublicWebPresence)
+    public async Task<InvitationCode> CreateAsync(string? owner, int maxUses, string? source, bool enablePublicWebPresence,
+        string? planId = null)
     {
         CheckMaxUses(maxUses);
         var normalizedOwner = owner == null ? null : NormalizeOwner(owner);
         var normalizedSource = source?.Trim() ?? "";
+        var normalizedPlanId = NormalizePlanId(planId);
 
         await using var connection = await OpenAsync();
         for (var attempt = 1; ; attempt++)
@@ -101,20 +108,21 @@ public class InvitationCodeStore
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                INSERT INTO invitation_codes (code, owner, source, enable_public_web_presence, max_uses, created_at)
-                VALUES (@code, @owner, @source, @enablePublicWebPresence, @maxUses, @now);
+                INSERT INTO invitation_codes (code, owner, source, enable_public_web_presence, plan_id, max_uses, created_at)
+                VALUES (@code, @owner, @source, @enablePublicWebPresence, @planId, @maxUses, @now);
                 """;
             command.Parameters.AddWithValue("@code", code);
             command.Parameters.AddWithValue("@owner", (object?)normalizedOwner ?? DBNull.Value);
             command.Parameters.AddWithValue("@source", normalizedSource);
             command.Parameters.AddWithValue("@enablePublicWebPresence", enablePublicWebPresence);
+            command.Parameters.AddWithValue("@planId", (object?)normalizedPlanId ?? DBNull.Value);
             command.Parameters.AddWithValue("@maxUses", maxUses);
             command.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             try
             {
                 await command.ExecuteNonQueryAsync();
                 return new InvitationCode(InvitationCodeFormat.Display(code), normalizedOwner, normalizedSource,
-                    enablePublicWebPresence, maxUses, maxUses, Disabled: false);
+                    enablePublicWebPresence, normalizedPlanId, maxUses, maxUses, Disabled: false);
             }
             catch (SqliteException e) when (e.SqliteErrorCode == SqliteConstraintError && attempt < MaxCreateAttempts)
             {
@@ -261,6 +269,11 @@ public class InvitationCodeStore
             sets.Add("enable_public_web_presence = @enablePublicWebPresence");
             command.Parameters.AddWithValue("@enablePublicWebPresence", change.EnablePublicWebPresence.Value);
         }
+        if (change.PlanId != null)
+        {
+            sets.Add("plan_id = @planId");
+            command.Parameters.AddWithValue("@planId", (object?)NormalizePlanId(change.PlanId) ?? DBNull.Value);
+        }
         if (change.Disabled != null)
         {
             sets.Add("disabled = @disabled");
@@ -281,7 +294,8 @@ public class InvitationCodeStore
     //
 
     /// <summary>
-    /// Counts codes and signups, in total, by source, by owner (codes without one are left out) and by week.
+    /// Counts codes and signups, in total, by source, by owner (codes without one are left out), by plan (codes
+    /// without one together, under a null name) and by week.
     /// </summary>
     /// <param name="since">Count only signups from here (unix ms); null counts all of them</param>
     public async Task<InvitationCodeStats> StatsAsync(long? since)
@@ -291,6 +305,7 @@ public class InvitationCodeStore
 
         var bySource = await ReadStatsLinesAsync(connection, sinceMs, "source", "");
         var byOwner = await ReadStatsLinesAsync(connection, sinceMs, "owner", "WHERE owner IS NOT NULL");
+        var byPlan = await ReadStatsLinesAsync(connection, sinceMs, "plan_id", "");
 
         InvitationCodeStatsLine totals;
         int neverUsed, usedUp, disabled;
@@ -327,14 +342,14 @@ public class InvitationCodeStore
             }
         }
 
-        return new InvitationCodeStats(since, totals, neverUsed, usedUp, disabled, bySource, byOwner, byWeek);
+        return new InvitationCodeStats(since, totals, neverUsed, usedUp, disabled, bySource, byOwner, byPlan, byWeek);
     }
 
     // One row per code: its uses ever, and its signups since @since
     private const string PerCode =
         """
         WITH per_code AS (
-            SELECT c.code, c.owner, c.source, c.max_uses, c.disabled,
+            SELECT c.code, c.owner, c.source, c.plan_id, c.max_uses, c.disabled,
                    COUNT(u.id) AS uses,
                    COUNT(CASE WHEN u.used_at >= @since THEN 1 END) AS signups
             FROM invitation_codes c LEFT JOIN invitation_code_uses u ON u.code = c.code
@@ -357,7 +372,8 @@ public class InvitationCodeStore
         var lines = new List<InvitationCodeStatsLine>();
         while (await reader.ReadAsync())
         {
-            lines.Add(new InvitationCodeStatsLine(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
+            lines.Add(new InvitationCodeStatsLine(reader.IsDBNull(0) ? null : reader.GetString(0), reader.GetInt32(1),
+                reader.GetInt32(2), reader.GetInt32(3)));
         }
         return lines;
     }
@@ -366,7 +382,8 @@ public class InvitationCodeStore
 
     private const string SelectWithUsesLeft =
         """
-        SELECT c.code, c.owner, c.source, c.enable_public_web_presence, c.max_uses, c.max_uses - COUNT(u.id), c.disabled
+        SELECT c.code, c.owner, c.source, c.enable_public_web_presence, c.plan_id, c.max_uses, c.max_uses - COUNT(u.id),
+               c.disabled
         FROM invitation_codes c LEFT JOIN invitation_code_uses u ON u.code = c.code
         """;
 
@@ -377,14 +394,18 @@ public class InvitationCodeStore
             reader.IsDBNull(1) ? null : reader.GetString(1),
             reader.GetString(2),
             reader.GetBoolean(3),
-            reader.GetInt32(4),
-            Math.Max(0, reader.GetInt32(5)),
-            reader.GetBoolean(6));
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetInt32(5),
+            Math.Max(0, reader.GetInt32(6)),
+            reader.GetBoolean(7));
     }
 
     // Two or more labels of letters, digits and inner hyphens, each 1-63 long
     private static readonly Regex DomainName =
         new(@"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", RegexOptions.Compiled);
+
+    // A plan id is a name the identity hosts know, e.g. "free" or "pro-100gb"
+    private static readonly Regex PlanIdFormat = new(@"^[A-Za-z0-9._-]{1,64}$", RegexOptions.Compiled);
 
     private static void CheckMaxUses(int maxUses)
     {
@@ -400,6 +421,21 @@ public class InvitationCodeStore
         if (normalized.Length > 253 || !DomainName.IsMatch(normalized))
         {
             throw new InvalidInvitationCodeRequestException("Invalid owner");
+        }
+        return normalized;
+    }
+
+    // Null or blank is no plan
+    private static string? NormalizePlanId(string? planId)
+    {
+        var normalized = planId?.Trim();
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return null;
+        }
+        if (!PlanIdFormat.IsMatch(normalized))
+        {
+            throw new InvalidInvitationCodeRequestException("Invalid planId");
         }
         return normalized;
     }
@@ -445,6 +481,7 @@ public class InvitationCodeStore
                     owner TEXT NULL,
                     source TEXT NOT NULL,
                     enable_public_web_presence INTEGER NOT NULL,
+                    plan_id TEXT NULL,
                     max_uses INTEGER NOT NULL,
                     created_at INTEGER NOT NULL,
                     disabled INTEGER NOT NULL DEFAULT 0
@@ -459,21 +496,28 @@ public class InvitationCodeStore
                 """;
             await command.ExecuteNonQueryAsync();
 
-            // Databases created before codes could be disabled lack the column
-            await using var columns = connection.CreateCommand();
-            columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('invitation_codes') WHERE name = 'disabled';";
-            if (Convert.ToInt64(await columns.ExecuteScalarAsync()) == 0)
-            {
-                await using var alter = connection.CreateCommand();
-                alter.CommandText = "ALTER TABLE invitation_codes ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;";
-                await alter.ExecuteNonQueryAsync();
-            }
+            // Databases created before codes could be disabled, or carry a plan, lack those columns
+            await AddColumnIfMissingAsync(connection, "disabled", "INTEGER NOT NULL DEFAULT 0");
+            await AddColumnIfMissingAsync(connection, "plan_id", "TEXT NULL");
 
             _initialized = true;
         }
         finally
         {
             _initializeLock.Release();
+        }
+    }
+
+    private static async Task AddColumnIfMissingAsync(SqliteConnection connection, string column, string definition)
+    {
+        await using var columns = connection.CreateCommand();
+        columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('invitation_codes') WHERE name = @column;";
+        columns.Parameters.AddWithValue("@column", column);
+        if (Convert.ToInt64(await columns.ExecuteScalarAsync()) == 0)
+        {
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE invitation_codes ADD COLUMN {column} {definition};";
+            await alter.ExecuteNonQueryAsync();
         }
     }
 }

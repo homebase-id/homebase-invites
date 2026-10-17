@@ -17,7 +17,7 @@ dotnet test
 ## Command line
 
 `./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
-repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks`,
+repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --owner frodo.demo.rocks --plan pro-100gb`,
 `./invites.sh list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
 
 ## Tests
@@ -43,6 +43,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `owner` | the identity the code belongs to; optional |
 | `source` | free text: where the code came from |
 | `enablePublicWebPresence` | whether an identity that signs up with it gets a public home page |
+| `planId` | the hosting plan, and so the quota, an identity that signs up with it gets; optional, `null` leaves it to the identity host. Letters, digits, `.`, `_` and `-`, up to 64 |
 | `maxUses`, `usesLeft` | how many signups it allows, and how many are left |
 | `disabled` | a disabled code cannot be used, whatever uses it has left |
 
@@ -53,12 +54,12 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `POST /validate {code}` | signup | `{valid}`: exists and has a use left |
 | `POST /use {code}` | signup | `{used, code}`: takes a use, atomically, and returns the code |
 | `POST /undo-use {code}` | signup | 204: gives the latest use back |
-| `POST / {owner?, maxUses, source, enablePublicWebPresence}` | create | the new code |
+| `POST / {owner?, maxUses, source, enablePublicWebPresence, planId?}` | create | the new code |
 | `GET /?owner=<odinId>` | create | the codes, all of them without `owner` |
-| `GET /stats?sinceDays=<n>` | create | codes and signups in total, by source, by owner and by week (Monday, UTC). `sinceDays` limits only the signups counted; the code counts (`neverUsed`, `usedUp`, `disabled`, codes, uses allowed) are always about every code as it is now |
-| `PATCH /<code> {maxUses?, source?, owner?, enablePublicWebPresence?, disabled?}` | create | the code as it is now; 404 if there is none. Fields left out stay as they are; `"owner": ""` removes the owner |
+| `GET /stats?sinceDays=<n>` | create | codes and signups in total, by source, by owner, by plan (`name: null` for codes without one) and by week (Monday, UTC). `sinceDays` limits only the signups counted; the code counts (`neverUsed`, `usedUp`, `disabled`, codes, uses allowed) are always about every code as it is now |
+| `PATCH /<code> {maxUses?, source?, owner?, enablePublicWebPresence?, planId?, disabled?}` | create | the code as it is now; 404 if there is none. Fields left out stay as they are; `"owner": ""` removes the owner and `"planId": ""` the plan |
 
-Bad input (owner not a domain, `maxUses` outside 1..10000) is a 400. Creating a code:
+Bad input (owner not a domain, a bad `planId`, `maxUses` outside 1..10000) is a 400. Creating a code:
 
 ```bash
 curl -X POST https://<service>/api/v1/invitation-codes/ \
