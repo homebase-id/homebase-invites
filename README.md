@@ -69,15 +69,19 @@ curl -X POST https://<service>/api/v1/invitation-codes/ \
 
 ## Configuration
 
-All required:
-
 | Key | Value |
 |---|---|
-| `InvitationCodes__DatabasePath` | e.g. `/data/invitation-codes.db`, on a persistent volume |
-| `InvitationCodes__SignupApiKey` | the signup key, for the identity hosts |
-| `InvitationCodes__CreateApiKey` | the create key, for admins |
+| `InvitationCodes__DatabasePath` | required; e.g. `/data/invitation-codes.db`, on a persistent volume |
+| `InvitationCodes__SignupApiKey` | required; the signup key, for the identity hosts |
+| `InvitationCodes__CreateApiKey` | required; the create key, for admins |
+| `InvitationCodes__RequestsPerMinutePerIp` | optional, default 300; more than that from one client is a 429 |
 
 SQLite means **one instance**, and the database file should be backed up.
+
+Against junk traffic: a request without the right key is refused before its body is read, a body over 4 KB
+is a 413, and each client IP gets `RequestsPerMinutePerIp`. The client IP comes from Caddy's `X-Forwarded-For`,
+which is trusted only from loopback and private addresses. Volume floods have to be stopped before the box,
+by a firewall or a CDN.
 
 Keys are 32 random bytes, base64url: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`. Give the
 signup key to Homebase-run identity hosts only (`Registry__InvitationCodeService__ApiKey` in odin-core),
@@ -85,6 +89,7 @@ never to self-hosted servers.
 
 ## Known gaps
 
-- No rate limiting on validation.
+- Requests are limited per client IP. Only odin-core can limit the people behind its public signup page, so
+  that limit belongs there.
 - An identity host that crashes between taking a use and registering leaks that use.
 - Codes stay valid after their owner is deleted, until someone disables them.

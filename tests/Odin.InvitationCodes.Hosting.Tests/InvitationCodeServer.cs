@@ -8,7 +8,8 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 /// The service with a database in a temp file and known keys, deleted on dispose. In process by default;
 /// <see cref="StartOnKestrel"/> puts it on a real port for clients outside the process, like invites.sh.
 /// </summary>
-public sealed class InvitationCodeServer : WebApplicationFactory<Program>
+/// <param name="requestsPerMinutePerIp">High by default, so only the rate-limit tests meet the limit</param>
+public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) : WebApplicationFactory<Program>
 {
     public const string SignupKey = "test-signup-key";
     public const string CreateKey = "test-create-key";
@@ -21,6 +22,7 @@ public sealed class InvitationCodeServer : WebApplicationFactory<Program>
         builder.UseSetting("InvitationCodes:DatabasePath", _path);
         builder.UseSetting("InvitationCodes:SignupApiKey", SignupKey);
         builder.UseSetting("InvitationCodes:CreateApiKey", CreateKey);
+        builder.UseSetting("InvitationCodes:RequestsPerMinutePerIp", requestsPerMinutePerIp.ToString());
     }
 
     /// <summary>

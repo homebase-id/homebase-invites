@@ -1,5 +1,8 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Odin.InvitationCodes.Hosting;
 
 // The invitation-code service (#1908): holds the codes and counts their uses. The identity hosts call it with
@@ -11,9 +14,36 @@ var databasePath = Required("InvitationCodes:DatabasePath");
 var signupApiKey = Required("InvitationCodes:SignupApiKey");
 var createApiKey = Required("InvitationCodes:CreateApiKey");
 
+var requestsPerMinute = builder.Configuration.GetValue("InvitationCodes:RequestsPerMinutePerIp", 300);
+
 var store = new InvitationCodeStore(databasePath);
 
+// Every real request is well under 1 KB
+builder.WebHost.ConfigureKestrel(kestrel => kestrel.Limits.MaxRequestBodySize = InvitationCodeApi.MaxRequestBodySize);
+
+// Caddy, on a private address, says who the client is; nobody else is believed
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    foreach (var network in new[] { "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7" })
+    {
+        options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+    }
+});
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, IPAddress>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress ?? IPAddress.None,
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = requestsPerMinute, Window = TimeSpan.FromMinutes(1) }));
+});
+
 var app = builder.Build();
+
+app.UseForwardedHeaders();
+app.UseRateLimiter();
+app.Use(InvitationCodeApi.RequireApiKey);
 
 app.MapGet("/ping", () => "pong");
 
@@ -23,7 +53,7 @@ var root = app.MapGroup(InvitationCodeApi.Root).AddEndpointFilter(InvitationCode
 // Signup key: the identity hosts
 //
 
-var signup = root.MapGroup("").AddEndpointFilter(InvitationCodeApi.RequireApiKey(signupApiKey));
+var signup = root.MapGroup("").WithMetadata(new ApiKey(signupApiKey));
 
 signup.MapPost("/validate", async (CodeRequest request) =>
 {
@@ -47,7 +77,7 @@ signup.MapPost("/undo-use", async (CodeRequest request) =>
 // Create key: admins
 //
 
-var admin = root.MapGroup("").AddEndpointFilter(InvitationCodeApi.RequireApiKey(createApiKey));
+var admin = root.MapGroup("").WithMetadata(new ApiKey(createApiKey));
 
 admin.MapPost("/", async (CreateRequest request) =>
     await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence,
@@ -87,22 +117,35 @@ public record UseResponse(bool Used, InvitationCode? Code);
 
 public partial class Program;
 
+/// <summary>
+/// The key an endpoint needs in the <see cref="InvitationCodeApi.ApiKeyHeader"/> header
+/// </summary>
+internal sealed class ApiKey(string key)
+{
+    private readonly byte[] _expected = Encoding.UTF8.GetBytes(key);
+
+    public bool Matches(string presented) =>
+        CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), _expected);
+}
+
 internal static class InvitationCodeApi
 {
     public const string Root = "/api/v1/invitation-codes";
     public const string ApiKeyHeader = "Odin-Api-Key";
+    public const long MaxRequestBodySize = 4 * 1024;
 
-    public static Func<EndpointFilterInvocationContext, EndpointFilterDelegate, ValueTask<object?>> RequireApiKey(
-        string apiKey)
+    /// <summary>
+    /// Refuses a request without its endpoint's <see cref="ApiKey"/> before anything reads the body
+    /// </summary>
+    public static async Task RequireApiKey(HttpContext context, RequestDelegate next)
     {
-        var expected = Encoding.UTF8.GetBytes(apiKey);
-        return async (context, next) =>
+        var apiKey = context.GetEndpoint()?.Metadata.GetMetadata<ApiKey>();
+        if (apiKey != null && !apiKey.Matches(context.Request.Headers[ApiKeyHeader].ToString()))
         {
-            var presented = Encoding.UTF8.GetBytes(context.HttpContext.Request.Headers[ApiKeyHeader].ToString());
-            return CryptographicOperations.FixedTimeEquals(presented, expected)
-                ? await next(context)
-                : Results.Unauthorized();
-        };
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+        await next(context);
     }
 
     public static async ValueTask<object?> BadRequestOnInvalid(EndpointFilterInvocationContext context,
