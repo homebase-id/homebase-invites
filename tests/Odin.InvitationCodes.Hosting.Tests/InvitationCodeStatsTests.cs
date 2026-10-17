@@ -2,9 +2,10 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 
 public class InvitationCodeStatsTests : StoreTestBase
 {
-    private async Task<InvitationCode> CreateAndUse(string source, string? owner, int maxUses, int uses)
+    private async Task<InvitationCode> CreateAndUse(string source, string? owner, int maxUses, int uses,
+        string? planId = null)
     {
-        var code = await Store.CreateAsync(owner, maxUses, source, enablePublicWebPresence: true);
+        var code = await Store.CreateAsync(owner, maxUses, source, enablePublicWebPresence: true, planId);
         for (var i = 0; i < uses; i++)
         {
             Assert.That(await Store.TryUseAsync(code.Code), Is.Not.Null);
@@ -21,6 +22,7 @@ public class InvitationCodeStatsTests : StoreTestBase
         Assert.That((stats.NeverUsed, stats.UsedUp, stats.Disabled), Is.EqualTo((0, 0, 0)));
         Assert.That(stats.BySource, Is.Empty);
         Assert.That(stats.ByOwner, Is.Empty);
+        Assert.That(stats.ByPlan, Is.Empty);
         Assert.That(stats.ByWeek, Is.Empty);
     }
 
@@ -46,6 +48,24 @@ public class InvitationCodeStatsTests : StoreTestBase
         {
             new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 2),
             new InvitationCodeStatsLine("sam.dotyou.cloud", 1, 3, 0),
+        }));
+    }
+
+    [Test]
+    public async Task CodesAndSignupsAreCountedByPlanWithCodesWithoutOneTogether()
+    {
+        await CreateAndUse("spring", null, maxUses: 2, uses: 2, planId: "pro-100gb");
+        await CreateAndUse("booth", null, maxUses: 3, uses: 1, planId: "pro-100gb");
+        await CreateAndUse("spring", null, maxUses: 4, uses: 0, planId: "free");
+        await CreateAndUse("booth", null, maxUses: 1, uses: 1);
+
+        var stats = await Store.StatsAsync(null);
+
+        Assert.That(stats.ByPlan, Is.EqualTo(new[]
+        {
+            new InvitationCodeStatsLine("pro-100gb", 2, 5, 3),
+            new InvitationCodeStatsLine(null, 1, 1, 1),
+            new InvitationCodeStatsLine("free", 1, 4, 0),
         }));
     }
 

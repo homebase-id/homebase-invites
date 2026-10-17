@@ -224,7 +224,8 @@ public class InvitationCodeApiTests
     [Test]
     public async Task StatsCountCodesAndSignups()
     {
-        var code = await _server.CreateCodeAsync(maxUses: 2, owner: "frodo.dotyou.cloud", source: "spring");
+        var code = await _server.CreateCodeAsync(maxUses: 2, owner: "frodo.dotyou.cloud", source: "spring",
+            planId: "pro-100gb");
         await _server.CreateCodeAsync(maxUses: 3, owner: null, source: "booth");
         await UseAsync(code.Code);
 
@@ -239,6 +240,11 @@ public class InvitationCodeApiTests
             new InvitationCodeStatsLine("booth", 1, 3, 0),
         }));
         Assert.That(stats.ByOwner, Is.EqualTo(new[] { new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 1) }));
+        Assert.That(stats.ByPlan, Is.EqualTo(new[]
+        {
+            new InvitationCodeStatsLine("pro-100gb", 1, 2, 1),
+            new InvitationCodeStatsLine(null, 1, 3, 0),
+        }));
         Assert.That(stats.ByWeek.Single().Signups, Is.EqualTo(1));
     }
 

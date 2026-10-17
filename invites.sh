@@ -50,7 +50,7 @@ CREATE AND LIST CODES  (create key)
 
 SEE HOW CODES ARE DOING  (create key)
   stats [--since <days>] [--json]
-      Counts codes and signups: in total, by source, by owner, and per week.
+      Counts codes and signups: in total, by source, by owner, by plan, and per week.
         --since <days>      count only signups from the last <days> days. The code counts
                             (codes, uses allowed, never used, used up, disabled) are always
                             about every code as it is now.
@@ -96,7 +96,7 @@ EXAMPLES
   ./invites.sh list --owner frodo.demo.rocks
 
   ./invites.sh stats --since 30
-      signups in the last 30 days, by source, owner and week
+      signups in the last 30 days, by source, owner, plan and week
 
   ./invites.sh edit K7QX-M2PD-9FHW --uses 20 --no-public-page
       allow 20 signups in total, and no public home page from now on
@@ -216,6 +216,9 @@ case "$cmd" in
         "",
         "by owner",
         (if (.byOwner | length) == 0 then "  (no code has an owner)" else (.byOwner[] | row(.name)) end),
+        "",
+        "by plan",
+        (.byPlan[] | row(.name // "(no plan)")),
         "",
         "signups per week, from Monday",
         (if (.byWeek | length) == 0 then "  (none)"

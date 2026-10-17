@@ -51,9 +51,10 @@ public record InvitationCodeStats(
     int Disabled,
     List<InvitationCodeStatsLine> BySource,
     List<InvitationCodeStatsLine> ByOwner,
+    List<InvitationCodeStatsLine> ByPlan,
     List<WeeklySignups> ByWeek);
 
-/// <param name="Name">The source or owner the line is for; null on the totals</param>
+/// <param name="Name">The source, owner or plan the line is for; null on the totals and on codes without a plan</param>
 /// <param name="UsesAllowed">The codes' MaxUses added up</param>
 public record InvitationCodeStatsLine(string? Name, int Codes, int UsesAllowed, int Signups);
 
@@ -293,7 +294,8 @@ public class InvitationCodeStore
     //
 
     /// <summary>
-    /// Counts codes and signups, in total, by source, by owner (codes without one are left out) and by week.
+    /// Counts codes and signups, in total, by source, by owner (codes without one are left out), by plan (codes
+    /// without one together, under a null name) and by week.
     /// </summary>
     /// <param name="since">Count only signups from here (unix ms); null counts all of them</param>
     public async Task<InvitationCodeStats> StatsAsync(long? since)
@@ -303,6 +305,7 @@ public class InvitationCodeStore
 
         var bySource = await ReadStatsLinesAsync(connection, sinceMs, "source", "");
         var byOwner = await ReadStatsLinesAsync(connection, sinceMs, "owner", "WHERE owner IS NOT NULL");
+        var byPlan = await ReadStatsLinesAsync(connection, sinceMs, "plan_id", "");
 
         InvitationCodeStatsLine totals;
         int neverUsed, usedUp, disabled;
@@ -339,14 +342,14 @@ public class InvitationCodeStore
             }
         }
 
-        return new InvitationCodeStats(since, totals, neverUsed, usedUp, disabled, bySource, byOwner, byWeek);
+        return new InvitationCodeStats(since, totals, neverUsed, usedUp, disabled, bySource, byOwner, byPlan, byWeek);
     }
 
     // One row per code: its uses ever, and its signups since @since
     private const string PerCode =
         """
         WITH per_code AS (
-            SELECT c.code, c.owner, c.source, c.max_uses, c.disabled,
+            SELECT c.code, c.owner, c.source, c.plan_id, c.max_uses, c.disabled,
                    COUNT(u.id) AS uses,
                    COUNT(CASE WHEN u.used_at >= @since THEN 1 END) AS signups
             FROM invitation_codes c LEFT JOIN invitation_code_uses u ON u.code = c.code
@@ -369,7 +372,8 @@ public class InvitationCodeStore
         var lines = new List<InvitationCodeStatsLine>();
         while (await reader.ReadAsync())
         {
-            lines.Add(new InvitationCodeStatsLine(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
+            lines.Add(new InvitationCodeStatsLine(reader.IsDBNull(0) ? null : reader.GetString(0), reader.GetInt32(1),
+                reader.GetInt32(2), reader.GetInt32(3)));
         }
         return lines;
     }

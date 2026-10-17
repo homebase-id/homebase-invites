@@ -225,7 +225,7 @@ public class InvitesCliTests
     [Test]
     public async Task StatsPrintsAReport()
     {
-        var code = await CreateAsync(maxUses: 3, owner: "stats-owner.dotyou.cloud", source: "stats-source");
+        var code = await CreateAsync(maxUses: 3, owner: "stats-owner.dotyou.cloud", source: "stats-source", planId: "stats-plan");
         await RunAsync("use", code.Code);
 
         var result = await RunAsync("stats");
@@ -234,6 +234,7 @@ public class InvitesCliTests
         Assert.That(result.Output, Does.StartWith("Signups of all time\n"));
         Assert.That(result.Output, Does.Match(@"\n  stats-source +1 +3 +1\n"));
         Assert.That(result.Output, Does.Match(@"\n  stats-owner\.dotyou\.cloud +1 +3 +1\n"));
+        Assert.That(result.Output, Does.Match(@"\nby plan\n(  .*\n)*  stats-plan +1 +3 +1\n"));
         Assert.That(result.Output, Does.Match(@"\nsignups per week, from Monday\n  \d{4}-\d{2}-\d{2} +\d+  #+\n"));
         Assert.That(result.Output, Does.Match(@"\ncodes: \d+ never used, \d+ used up, \d+ disabled\n$"));
     }
@@ -279,12 +280,17 @@ public class InvitesCliTests
 
     //
 
-    private async Task<InvitationCode> CreateAsync(int maxUses = 2, string? owner = null, string source = "cli-test")
+    private async Task<InvitationCode> CreateAsync(int maxUses = 2, string? owner = null, string source = "cli-test",
+        string? planId = null)
     {
         List<string> arguments = ["create", "--uses", maxUses.ToString(), "--source", source];
         if (owner != null)
         {
             arguments.AddRange(["--owner", owner]);
+        }
+        if (planId != null)
+        {
+            arguments.AddRange(["--plan", planId]);
         }
         var result = await RunAsync(arguments.ToArray());
         Assert.That(result.Status, Is.EqualTo(200), result.Output + result.Error);
