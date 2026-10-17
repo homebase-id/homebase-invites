@@ -5,7 +5,7 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 public class InvitationCodeStoreTests : StoreTestBase
 {
     private Task<InvitationCode> Create(int maxUses, string? owner = "frodo.dotyou.cloud") =>
-        Store.CreateAsync(owner, maxUses, "test", enablePublicWebPresence: true);
+        Store.CreateAsync(owner, maxUses, "test", enablePublicWebPresence: true, planId: "free");
 
     [Test]
     public async Task ACodeCanBeUsedExactlyMaxUsesTimes()
@@ -35,12 +35,10 @@ public class InvitationCodeStoreTests : StoreTestBase
     }
 
     [Test]
-    public async Task ACodeNeedNotHaveAPlan()
+    public void ACodeMustHaveAPlan()
     {
-        var created = await Create(1);
-
-        Assert.That(created.PlanId, Is.Null);
-        Assert.That((await Store.TryUseAsync(created.Code))!.PlanId, Is.Null);
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => Store.CreateAsync(null, 1, "test", true, planId: null));
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() => Store.CreateAsync(null, 1, "test", true, planId: " "));
     }
 
     [Test]
@@ -171,16 +169,18 @@ public class InvitationCodeStoreTests : StoreTestBase
     }
 
     [Test]
-    public async Task EditCanChangeOrRemoveThePlan()
+    public async Task EditCanChangeThePlanButNotRemoveIt()
     {
         var created = await Create(2);
 
+        Assert.That(created.PlanId, Is.EqualTo("free"));
         var planned = await Store.UpdateAsync(created.Code, new InvitationCodeChange(PlanId: "pro-100gb"));
         Assert.That(planned, Is.EqualTo(created with { PlanId = "pro-100gb" }));
         Assert.That((await Store.TryUseAsync(created.Code))!.PlanId, Is.EqualTo("pro-100gb"));
 
-        var removed = await Store.UpdateAsync(created.Code, new InvitationCodeChange(PlanId: " "));
-        Assert.That(removed!.PlanId, Is.Null);
+        Assert.ThrowsAsync<InvalidInvitationCodeRequestException>(() =>
+            Store.UpdateAsync(created.Code, new InvitationCodeChange(PlanId: " ")));
+        Assert.That((await Store.GetAsync(created.Code))!.PlanId, Is.EqualTo("pro-100gb"));
     }
 
     [Test]

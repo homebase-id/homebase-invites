@@ -97,7 +97,7 @@ admin.MapGet("/stats", async (int? sinceDays) =>
     return await store.StatsAsync(since);
 });
 
-// Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" and "planId": "" remove them.
+// Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" removes the owner.
 admin.MapPatch("/{code}", async (string code, InvitationCodeChange change) =>
     await store.UpdateAsync(code, change) is { } updated ? Results.Ok(updated) : Results.NotFound());
 
@@ -111,7 +111,7 @@ string Required(string key)
 
 public record CodeRequest(string? Code);
 public record CreateRequest(string? Owner, int MaxUses, string? Source, bool EnablePublicWebPresence,
-    string? PlanId = null);
+    string? PlanId);
 public record ValidateResponse(bool Valid);
 public record UseResponse(bool Used, InvitationCode? Code);
 

@@ -3,7 +3,7 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 public class InvitationCodeStatsTests : StoreTestBase
 {
     private async Task<InvitationCode> CreateAndUse(string source, string? owner, int maxUses, int uses,
-        string? planId = null)
+        string planId = "free")
     {
         var code = await Store.CreateAsync(owner, maxUses, source, enablePublicWebPresence: true, planId);
         for (var i = 0; i < uses; i++)
@@ -52,7 +52,7 @@ public class InvitationCodeStatsTests : StoreTestBase
     }
 
     [Test]
-    public async Task CodesAndSignupsAreCountedByPlanWithCodesWithoutOneTogether()
+    public async Task CodesAndSignupsAreCountedByPlan()
     {
         await CreateAndUse("spring", null, maxUses: 2, uses: 2, planId: "pro-100gb");
         await CreateAndUse("booth", null, maxUses: 3, uses: 1, planId: "pro-100gb");
@@ -64,8 +64,7 @@ public class InvitationCodeStatsTests : StoreTestBase
         Assert.That(stats.ByPlan, Is.EqualTo(new[]
         {
             new InvitationCodeStatsLine("pro-100gb", 2, 5, 3),
-            new InvitationCodeStatsLine(null, 1, 1, 1),
-            new InvitationCodeStatsLine("free", 1, 4, 0),
+            new InvitationCodeStatsLine("free", 2, 5, 1),
         }));
     }
 

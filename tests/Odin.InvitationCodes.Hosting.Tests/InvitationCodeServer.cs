@@ -49,7 +49,7 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) :
     }
 
     public async Task<InvitationCode> CreateCodeAsync(int maxUses = 5, string? owner = "frodo.dotyou.cloud",
-        string source = "test", bool enablePublicWebPresence = true, string? planId = null)
+        string source = "test", bool enablePublicWebPresence = true, string planId = "free")
     {
         using var client = ClientWithKey(CreateKey);
         var response = await client.PostAsJsonAsync(Root + "/",
