@@ -1,7 +1,6 @@
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 
 namespace Odin.InvitationCodes.Hosting.Tests;
 
@@ -15,7 +14,7 @@ public sealed class InvitationCodeServer : WebApplicationFactory<Program>
     public const string CreateKey = "test-create-key";
     public const string Root = "/api/v1/invitation-codes";
 
-    private readonly string _path = Path.Combine(Path.GetTempPath(), $"invitation-codes-{Guid.NewGuid()}.db");
+    private readonly string _path = TempDatabase.NewPath();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -60,10 +59,6 @@ public sealed class InvitationCodeServer : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        SqliteConnection.ClearAllPools();
-        foreach (var file in new[] { _path, _path + "-wal", _path + "-shm" })
-        {
-            File.Delete(file);
-        }
+        TempDatabase.Delete(_path);
     }
 }
