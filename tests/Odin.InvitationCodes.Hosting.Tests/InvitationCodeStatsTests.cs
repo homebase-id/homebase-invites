@@ -18,7 +18,7 @@ public class InvitationCodeStatsTests : StoreTestBase
     {
         var stats = await Store.StatsAsync(null);
 
-        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 0, 0, 0)));
+        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 0, 0, 0, 0)));
         Assert.That((stats.NeverUsed, stats.UsedUp, stats.Disabled), Is.EqualTo((0, 0, 0)));
         Assert.That(stats.BySource, Is.Empty);
         Assert.That(stats.ByOwner, Is.Empty);
@@ -36,18 +36,19 @@ public class InvitationCodeStatsTests : StoreTestBase
 
         var stats = await Store.StatsAsync(null);
 
-        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 3, 6, 3)));
+        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 3, 6, 3, 0)));
         Assert.That((stats.NeverUsed, stats.UsedUp, stats.Disabled), Is.EqualTo((1, 2, 1)));
         Assert.That(stats.BySource, Is.EqualTo(new[]
         {
-            new InvitationCodeStatsLine("spring", 2, 3, 3),
-            new InvitationCodeStatsLine("booth", 1, 3, 0),
+            new InvitationCodeStatsLine("spring", 2, 3, 3, 0),
+            // Disabled, so none left whatever it has unused
+            new InvitationCodeStatsLine("booth", 1, 3, 0, 0),
         }));
         // A code without an owner has no line of its own
         Assert.That(stats.ByOwner, Is.EqualTo(new[]
         {
-            new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 2),
-            new InvitationCodeStatsLine("sam.dotyou.cloud", 1, 3, 0),
+            new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 2, 0),
+            new InvitationCodeStatsLine("sam.dotyou.cloud", 1, 3, 0, 0),
         }));
     }
 
@@ -63,9 +64,21 @@ public class InvitationCodeStatsTests : StoreTestBase
 
         Assert.That(stats.ByPlan, Is.EqualTo(new[]
         {
-            new InvitationCodeStatsLine("pro-100gb", 2, 5, 3),
-            new InvitationCodeStatsLine("free", 2, 5, 1),
+            new InvitationCodeStatsLine("pro-100gb", 2, 5, 3, 2),
+            new InvitationCodeStatsLine("free", 2, 5, 1, 4),
         }));
+    }
+
+    [Test]
+    public async Task ACodeLoweredBelowItsUsesLeavesNoneNotLessThanNone()
+    {
+        var lowered = await CreateAndUse("spring", null, maxUses: 3, uses: 2);
+        await Store.UpdateAsync(lowered.Code, new InvitationCodeChange(MaxUses: 1));
+        await CreateAndUse("spring", null, maxUses: 4, uses: 1);
+
+        var stats = await Store.StatsAsync(null);
+
+        Assert.That(stats.Totals.UsesLeft, Is.EqualTo(3));
     }
 
     [Test]
@@ -77,7 +90,7 @@ public class InvitationCodeStatsTests : StoreTestBase
 
         var stats = await Store.StatsAsync(now.AddDays(-30).ToUnixTimeMilliseconds());
 
-        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 1, 2, 1)));
+        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 1, 2, 1, 0)));
         Assert.That(stats.BySource.Single().Signups, Is.EqualTo(1));
         Assert.That(stats.ByWeek.Sum(w => w.Signups), Is.EqualTo(1));
         // Used up is about the code as it is, whenever its uses were taken

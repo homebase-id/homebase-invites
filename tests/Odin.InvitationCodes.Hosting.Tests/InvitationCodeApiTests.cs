@@ -232,18 +232,18 @@ public class InvitationCodeApiTests
         var stats = await _admin.GetFromJsonAsync<InvitationCodeStats>(Root + "/stats");
 
         Assert.That(stats!.Since, Is.Null);
-        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 2, 5, 1)));
+        Assert.That(stats.Totals, Is.EqualTo(new InvitationCodeStatsLine(null, 2, 5, 1, 4)));
         Assert.That((stats.NeverUsed, stats.UsedUp, stats.Disabled), Is.EqualTo((1, 0, 0)));
         Assert.That(stats.BySource, Is.EqualTo(new[]
         {
-            new InvitationCodeStatsLine("spring", 1, 2, 1),
-            new InvitationCodeStatsLine("booth", 1, 3, 0),
+            new InvitationCodeStatsLine("spring", 1, 2, 1, 1),
+            new InvitationCodeStatsLine("booth", 1, 3, 0, 3),
         }));
-        Assert.That(stats.ByOwner, Is.EqualTo(new[] { new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 1) }));
+        Assert.That(stats.ByOwner, Is.EqualTo(new[] { new InvitationCodeStatsLine("frodo.dotyou.cloud", 1, 2, 1, 1) }));
         Assert.That(stats.ByPlan, Is.EqualTo(new[]
         {
-            new InvitationCodeStatsLine("pro-100gb", 1, 2, 1),
-            new InvitationCodeStatsLine("free", 1, 3, 0),
+            new InvitationCodeStatsLine("pro-100gb", 1, 2, 1, 1),
+            new InvitationCodeStatsLine("free", 1, 3, 0, 3),
         }));
         Assert.That(stats.ByWeek.Single().Signups, Is.EqualTo(1));
     }

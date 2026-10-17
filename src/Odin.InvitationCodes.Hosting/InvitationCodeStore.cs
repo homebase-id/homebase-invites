@@ -40,8 +40,8 @@ public record InvitationCodeChange(
 public class InvalidInvitationCodeRequestException(string message) : Exception(message);
 
 /// <summary>
-/// How the codes are doing. <see cref="Since"/> limits only the signups: the counts of codes, uses allowed,
-/// never used, used up and disabled are always about every code as it is now.
+/// How the codes are doing. <see cref="Since"/> limits only the signups: the counts of codes, uses allowed, uses
+/// left, never used, used up and disabled are always about every code as it is now.
 /// </summary>
 /// <param name="Since">Signups counted from here (unix ms); null counts all of them</param>
 public record InvitationCodeStats(
@@ -57,7 +57,8 @@ public record InvitationCodeStats(
 
 /// <param name="Name">The source, owner or plan the line is for; null on the totals and on codes without a plan</param>
 /// <param name="UsesAllowed">The codes' MaxUses added up</param>
-public record InvitationCodeStatsLine(string? Name, int Codes, int UsesAllowed, int Signups);
+/// <param name="UsesLeft">The signups the codes still allow now: their UsesLeft added up, disabled codes counting none</param>
+public record InvitationCodeStatsLine(string? Name, int Codes, int UsesAllowed, int Signups, int UsesLeft);
 
 /// <param name="Week">The Monday the week starts on (UTC), as yyyy-MM-dd</param>
 public record WeeklySignups(string Week, int Signups);
@@ -314,15 +315,16 @@ public class InvitationCodeStore
         {
             command.CommandText = PerCode +
                 """
-                SELECT COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0),
+                SELECT COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0), COALESCE(SUM(uses_left), 0),
                        COALESCE(SUM(uses = 0), 0), COALESCE(SUM(uses >= max_uses), 0), COALESCE(SUM(disabled), 0)
                 FROM per_code;
                 """;
             command.Parameters.AddWithValue("@since", sinceMs);
             await using var reader = await command.ExecuteReaderAsync();
             await reader.ReadAsync();
-            totals = new InvitationCodeStatsLine(null, reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
-            (neverUsed, usedUp, disabled) = (reader.GetInt32(3), reader.GetInt32(4), reader.GetInt32(5));
+            totals = new InvitationCodeStatsLine(null, reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2),
+                reader.GetInt32(3));
+            (neverUsed, usedUp, disabled) = (reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6));
         }
 
         var byWeek = new List<WeeklySignups>();
@@ -346,12 +348,13 @@ public class InvitationCodeStore
         return new InvitationCodeStats(since, totals, neverUsed, usedUp, disabled, bySource, byOwner, byPlan, byWeek);
     }
 
-    // One row per code: its uses ever, and its signups since @since
+    // One row per code: its uses ever, the uses it still allows (none if disabled), and its signups since @since
     private const string PerCode =
         """
         WITH per_code AS (
             SELECT c.code, c.owner, c.source, c.plan_id, c.max_uses, c.disabled,
                    COUNT(u.id) AS uses,
+                   CASE WHEN c.disabled THEN 0 ELSE MAX(c.max_uses - COUNT(u.id), 0) END AS uses_left,
                    COUNT(CASE WHEN u.used_at >= @since THEN 1 END) AS signups
             FROM invitation_codes c LEFT JOIN invitation_code_uses u ON u.code = c.code
             GROUP BY c.code
@@ -364,7 +367,7 @@ public class InvitationCodeStore
         await using var command = connection.CreateCommand();
         command.CommandText = PerCode +
             $"""
-            SELECT {column}, COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0)
+            SELECT {column}, COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0), COALESCE(SUM(uses_left), 0)
             FROM per_code {where} GROUP BY {column}
             ORDER BY 4 DESC, 1;
             """;
@@ -374,7 +377,7 @@ public class InvitationCodeStore
         while (await reader.ReadAsync())
         {
             lines.Add(new InvitationCodeStatsLine(reader.IsDBNull(0) ? null : reader.GetString(0), reader.GetInt32(1),
-                reader.GetInt32(2), reader.GetInt32(3)));
+                reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4)));
         }
         return lines;
     }

@@ -56,7 +56,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `POST /undo-use {code}` | signup | 204: gives the latest use back |
 | `POST / {owner?, maxUses, source, enablePublicWebPresence, planId}` | create | the new code |
 | `GET /?owner=<odinId>` | create | the codes, all of them without `owner` |
-| `GET /stats?sinceDays=<n>` | create | codes and signups in total, by source, by owner, by plan (`name: null` for old codes without one) and by week (Monday, UTC). `sinceDays` limits only the signups counted; the code counts (`neverUsed`, `usedUp`, `disabled`, codes, uses allowed) are always about every code as it is now |
+| `GET /stats?sinceDays=<n>` | create | codes and signups in total, by source, by owner, by plan (`name: null` for old codes without one) and by week (Monday, UTC). `sinceDays` limits only the signups counted; the code counts (`neverUsed`, `usedUp`, `disabled`, codes, uses allowed, `usesLeft`) are always about every code as it is now. `usesLeft` on each line is the signups its codes still allow, disabled codes counting none: watch `byPlan[].usesLeft` to see when a plan needs more codes |
 | `PATCH /<code> {maxUses?, source?, owner?, enablePublicWebPresence?, planId?, disabled?}` | create | the code as it is now; 404 if there is none. Fields left out stay as they are; `"owner": ""` removes the owner |
 
 Bad input (owner not a domain, a missing or bad `planId`, `maxUses` outside 1..10000) is a 400. Creating a code:
