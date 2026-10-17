@@ -11,13 +11,12 @@ var databasePath = Required("InvitationCodes:DatabasePath");
 var signupApiKey = Required("InvitationCodes:SignupApiKey");
 var createApiKey = Required("InvitationCodes:CreateApiKey");
 
-builder.Services.AddSingleton(new InvitationCodeStore(databasePath));
+var store = new InvitationCodeStore(databasePath);
 
 var app = builder.Build();
 
 app.MapGet("/ping", () => "pong");
 
-var store = app.Services.GetRequiredService<InvitationCodeStore>();
 var root = app.MapGroup(InvitationCodeApi.Root).AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid);
 
 //
@@ -60,11 +59,11 @@ admin.MapGet("/stats", async (int? sinceDays) =>
 {
     if (sinceDays is < 1)
     {
-        return Results.BadRequest("sinceDays must be 1 or more");
+        throw new InvalidInvitationCodeRequestException("sinceDays must be 1 or more");
     }
 
     var since = sinceDays == null ? (long?)null : DateTimeOffset.UtcNow.AddDays(-sinceDays.Value).ToUnixTimeMilliseconds();
-    return Results.Ok(await store.StatsAsync(since));
+    return await store.StatsAsync(since);
 });
 
 // Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" removes the owner.

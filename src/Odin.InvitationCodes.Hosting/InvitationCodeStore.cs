@@ -90,11 +90,7 @@ public class InvitationCodeStore
 
     public async Task<InvitationCode> CreateAsync(string? owner, int maxUses, string? source, bool enablePublicWebPresence)
     {
-        if (maxUses is < 1 or > MaxUsesLimit)
-        {
-            throw new InvalidInvitationCodeRequestException($"MaxUses must be between 1 and {MaxUsesLimit}");
-        }
-
+        CheckMaxUses(maxUses);
         var normalizedOwner = owner == null ? null : NormalizeOwner(owner);
         var normalizedSource = source?.Trim() ?? "";
 
@@ -155,13 +151,10 @@ public class InvitationCodeStore
     {
         await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
-        if (owner == null)
+        var where = owner == null ? "" : " WHERE c.owner = @owner";
+        command.CommandText = SelectWithUsesLeft + where + " GROUP BY c.code ORDER BY c.created_at, c.rowid;";
+        if (owner != null)
         {
-            command.CommandText = SelectWithUsesLeft + " GROUP BY c.code ORDER BY c.created_at, c.rowid;";
-        }
-        else
-        {
-            command.CommandText = SelectWithUsesLeft + " WHERE c.owner = @owner GROUP BY c.code ORDER BY c.created_at, c.rowid;";
             command.Parameters.AddWithValue("@owner", NormalizeOwner(owner));
         }
 
@@ -248,10 +241,7 @@ public class InvitationCodeStore
 
         if (change.MaxUses != null)
         {
-            if (change.MaxUses is < 1 or > MaxUsesLimit)
-            {
-                throw new InvalidInvitationCodeRequestException($"MaxUses must be between 1 and {MaxUsesLimit}");
-            }
+            CheckMaxUses(change.MaxUses.Value);
             sets.Add("max_uses = @maxUses");
             command.Parameters.AddWithValue("@maxUses", change.MaxUses.Value);
         }
@@ -281,14 +271,11 @@ public class InvitationCodeStore
             throw new InvalidInvitationCodeRequestException("Nothing to change");
         }
 
-        command.CommandText = $"UPDATE invitation_codes SET {string.Join(", ", sets)} WHERE code = @code;";
+        command.CommandText = $"UPDATE invitation_codes SET {string.Join(", ", sets)} WHERE code = @code;" +
+                              SelectWithUsesLeft + " WHERE c.code = @code AND changes() = 1 GROUP BY c.code;";
         command.Parameters.AddWithValue("@code", code);
-        if (await command.ExecuteNonQueryAsync() == 0)
-        {
-            return null;
-        }
-
-        return await GetAsync(code);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? Read(reader) : null;
     }
 
     //
@@ -299,24 +286,27 @@ public class InvitationCodeStore
     /// <param name="since">Count only signups from here (unix ms); null counts all of them</param>
     public async Task<InvitationCodeStats> StatsAsync(long? since)
     {
+        var sinceMs = since ?? 0;
         await using var connection = await OpenAsync();
 
-        var totals = await ReadStatsLinesAsync(connection, since, "NULL", "", "");
-        var bySource = await ReadStatsLinesAsync(connection, since, "source", "", "GROUP BY source");
-        var byOwner = await ReadStatsLinesAsync(connection, since, "owner", "WHERE owner IS NOT NULL", "GROUP BY owner");
+        var bySource = await ReadStatsLinesAsync(connection, sinceMs, "source", "");
+        var byOwner = await ReadStatsLinesAsync(connection, sinceMs, "owner", "WHERE owner IS NOT NULL");
 
+        InvitationCodeStatsLine totals;
         int neverUsed, usedUp, disabled;
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = PerCode +
                 """
-                SELECT COALESCE(SUM(uses = 0), 0), COALESCE(SUM(uses >= max_uses), 0), COALESCE(SUM(disabled), 0)
+                SELECT COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0),
+                       COALESCE(SUM(uses = 0), 0), COALESCE(SUM(uses >= max_uses), 0), COALESCE(SUM(disabled), 0)
                 FROM per_code;
                 """;
-            command.Parameters.AddWithValue("@since", since ?? 0);
+            command.Parameters.AddWithValue("@since", sinceMs);
             await using var reader = await command.ExecuteReaderAsync();
             await reader.ReadAsync();
-            (neverUsed, usedUp, disabled) = (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
+            totals = new InvitationCodeStatsLine(null, reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
+            (neverUsed, usedUp, disabled) = (reader.GetInt32(3), reader.GetInt32(4), reader.GetInt32(5));
         }
 
         var byWeek = new List<WeeklySignups>();
@@ -329,7 +319,7 @@ public class InvitationCodeStore
                 FROM invitation_code_uses WHERE used_at >= @since
                 GROUP BY week ORDER BY week;
                 """;
-            command.Parameters.AddWithValue("@since", since ?? 0);
+            command.Parameters.AddWithValue("@since", sinceMs);
             await using var reader = await command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
@@ -337,7 +327,7 @@ public class InvitationCodeStore
             }
         }
 
-        return new InvitationCodeStats(since, totals.Single(), neverUsed, usedUp, disabled, bySource, byOwner, byWeek);
+        return new InvitationCodeStats(since, totals, neverUsed, usedUp, disabled, bySource, byOwner, byWeek);
     }
 
     // One row per code: its uses ever, and its signups since @since
@@ -353,22 +343,21 @@ public class InvitationCodeStore
         """;
 
     private static async Task<List<InvitationCodeStatsLine>> ReadStatsLinesAsync(SqliteConnection connection,
-        long? since, string name, string where, string groupBy)
+        long since, string column, string where)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = PerCode +
             $"""
-            SELECT {name}, COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0)
-            FROM per_code {where} {groupBy}
+            SELECT {column}, COUNT(*), COALESCE(SUM(max_uses), 0), COALESCE(SUM(signups), 0)
+            FROM per_code {where} GROUP BY {column}
             ORDER BY 4 DESC, 1;
             """;
-        command.Parameters.AddWithValue("@since", since ?? 0);
+        command.Parameters.AddWithValue("@since", since);
         await using var reader = await command.ExecuteReaderAsync();
         var lines = new List<InvitationCodeStatsLine>();
         while (await reader.ReadAsync())
         {
-            lines.Add(new InvitationCodeStatsLine(reader.IsDBNull(0) ? null : reader.GetString(0),
-                reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
+            lines.Add(new InvitationCodeStatsLine(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
         }
         return lines;
     }
@@ -396,6 +385,14 @@ public class InvitationCodeStore
     // Two or more labels of letters, digits and inner hyphens, each 1-63 long
     private static readonly Regex DomainName =
         new(@"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", RegexOptions.Compiled);
+
+    private static void CheckMaxUses(int maxUses)
+    {
+        if (maxUses is < 1 or > MaxUsesLimit)
+        {
+            throw new InvalidInvitationCodeRequestException($"MaxUses must be between 1 and {MaxUsesLimit}");
+        }
+    }
 
     private static string NormalizeOwner(string owner)
     {
