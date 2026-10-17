@@ -49,9 +49,10 @@ CREATE AND LIST CODES  (create key)
 
 SEE HOW CODES ARE DOING  (create key)
   stats [--since <days>] [--json]
-      Counts codes and signups: in total, by source, by owner, by plan, and per week.
+      Counts codes, signups and the signups still left: in total, by source, by owner, by plan,
+      and per week. "left" is what the codes still allow now; disabled codes count none.
         --since <days>      count only signups from the last <days> days. The code counts
-                            (codes, uses allowed, never used, used up, disabled) are always
+                            (codes, uses allowed, left, never used, used up, disabled) are always
                             about every code as it is now.
         --json              print the service's JSON instead of the report (the report needs jq)
 
@@ -199,11 +200,11 @@ case "$cmd" in
     printf '%s' "$body" | jq -r '
       def left(n): tostring | . + (" " * ([n - length, 0] | max));
       def right(n): tostring | (" " * ([n - length, 0] | max)) + .;
-      def row(name): "  " + (name | left(34)) + (.codes | right(7)) + (.usesAllowed | right(9)) + (.signups | right(9));
+      def row(name): "  " + (name | left(34)) + (.codes | right(7)) + (.usesAllowed | right(9)) + (.signups | right(9)) + (.usesLeft | right(7));
       (([.byWeek[].signups] | max) // 1) as $most
       | "Signups " + (if .since then "since " + (.since / 1000 | floor | strftime("%Y-%m-%d")) else "of all time" end),
         "",
-        "  " + ("" | left(34)) + ("codes" | right(7)) + ("allowed" | right(9)) + ("signups" | right(9)),
+        "  " + ("" | left(34)) + ("codes" | right(7)) + ("allowed" | right(9)) + ("signups" | right(9)) + ("left" | right(7)),
         (.totals | row("total")),
         "",
         "by source",

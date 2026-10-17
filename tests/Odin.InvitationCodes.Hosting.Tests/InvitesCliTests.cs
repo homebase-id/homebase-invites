@@ -232,9 +232,9 @@ public class InvitesCliTests
 
         Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
         Assert.That(result.Output, Does.StartWith("Signups of all time\n"));
-        Assert.That(result.Output, Does.Match(@"\n  stats-source +1 +3 +1\n"));
-        Assert.That(result.Output, Does.Match(@"\n  stats-owner\.dotyou\.cloud +1 +3 +1\n"));
-        Assert.That(result.Output, Does.Match(@"\nby plan\n(  .*\n)*  stats-plan +1 +3 +1\n"));
+        Assert.That(result.Output, Does.Match(@"\n  stats-source +1 +3 +1 +2\n"));
+        Assert.That(result.Output, Does.Match(@"\n  stats-owner\.dotyou\.cloud +1 +3 +1 +2\n"));
+        Assert.That(result.Output, Does.Match(@"\nby plan\n(  .*\n)*  stats-plan +1 +3 +1 +2\n"));
         Assert.That(result.Output, Does.Match(@"\nsignups per week, from Monday\n  \d{4}-\d{2}-\d{2} +\d+  #+\n"));
         Assert.That(result.Output, Does.Match(@"\ncodes: \d+ never used, \d+ used up, \d+ disabled\n$"));
     }
