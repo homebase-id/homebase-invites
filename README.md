@@ -42,7 +42,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `code` | 12 Crockford base32 characters, shown as `K7QX-M2PD-9FHW`; input is case-insensitive and ignores dashes and spaces |
 | `owner` | the identity the code belongs to; optional |
 | `source` | free text: where the code came from |
-| `enablePublicWebPresence` | whether an identity that signs up with it gets a public home page |
+| `enablePublicWebPresence` | **deprecated**: whether an identity that signs up with it gets a public home page, on identity hosts from before odin-core #1974. Later hosts ignore it and take it from the identity's plan. Optional, on by default; still stored and sent for those older hosts |
 | `planId` | the hosting plan, and so the quota, an identity that signs up with it gets; required when a code is made, and can be changed but not removed. Letters, digits, `.`, `_` and `-`, up to 64. `null` only on codes made before it was required, which leave the plan to the identity host |
 | `maxUses`, `usesLeft` | how many signups it allows, and how many are left |
 | `disabled` | a disabled code cannot be used, whatever uses it has left |
@@ -54,7 +54,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | `POST /validate {code}` | signup | `{valid}`: exists and has a use left |
 | `POST /use {code}` | signup | `{used, code}`: takes a use, atomically, and returns the code |
 | `POST /undo-use {code}` | signup | 204: gives the latest use back |
-| `POST / {owner?, maxUses, source, enablePublicWebPresence, planId}` | create | the new code |
+| `POST / {owner?, maxUses, source, planId, enablePublicWebPresence?}` | create | the new code |
 | `GET /?owner=<odinId>` | create | the codes, all of them without `owner` |
 | `GET /stats?sinceDays=<n>` | create | codes and signups in total, by source, by owner, by plan (`name: null` for old codes without one) and by week (Monday, UTC). `sinceDays` limits only the signups counted; the code counts (`neverUsed`, `usedUp`, `disabled`, codes, uses allowed, `usesLeft`) are always about every code as it is now. `usesLeft` on each line is the signups its codes still allow, disabled codes counting none: watch `byPlan[].usesLeft` to see when a plan needs more codes |
 | `PATCH /<code> {maxUses?, source?, owner?, enablePublicWebPresence?, planId?, disabled?}` | create | the code as it is now; 404 if there is none. Fields left out stay as they are; `"owner": ""` removes the owner |
@@ -64,7 +64,7 @@ Bad input (owner not a domain, a missing or bad `planId`, `maxUses` outside 1..1
 ```bash
 curl -X POST https://<service>/api/v1/invitation-codes/ \
   -H 'Odin-Api-Key: <create key>' -H 'Content-Type: application/json' \
-  -d '{"owner":"frodo.demo.rocks","maxUses":5,"source":"spring campaign","enablePublicWebPresence":true,"planId":"pro-100gb"}'
+  -d '{"owner":"frodo.demo.rocks","maxUses":5,"source":"spring campaign","planId":"pro-100gb"}'
 ```
 
 ## Configuration

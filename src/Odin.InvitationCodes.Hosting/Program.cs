@@ -80,7 +80,7 @@ signup.MapPost("/undo-use", async (CodeRequest request) =>
 var admin = root.MapGroup("").WithMetadata(new ApiKey(createApiKey));
 
 admin.MapPost("/", async (CreateRequest request) =>
-    await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence,
+    await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence ?? true,
         request.PlanId));
 
 admin.MapGet("/", async (string? owner) => await store.ListAsync(owner));
@@ -110,7 +110,9 @@ string Required(string key)
 }
 
 public record CodeRequest(string? Code);
-public record CreateRequest(string? Owner, int MaxUses, string? Source, bool EnablePublicWebPresence,
+// EnablePublicWebPresence is optional and on by default: identity hosts from odin-core #1974 ignore it and take
+// public web presence from the plan. It is still stored and sent for hosts from before that.
+public record CreateRequest(string? Owner, int MaxUses, string? Source, bool? EnablePublicWebPresence,
     string? PlanId);
 public record ValidateResponse(bool Valid);
 public record UseResponse(bool Used, InvitationCode? Code);

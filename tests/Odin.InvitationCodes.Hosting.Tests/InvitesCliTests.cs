@@ -113,21 +113,31 @@ public class InvitesCliTests
     public async Task CreateMakesACodeWithWhatItIsGiven()
     {
         var result = await RunAsync("create", "--uses", "4", "--source", "spring \"quoted\" campaign", "--owner",
-            "frodo.dotyou.cloud", "--plan", "pro-100gb", "--no-public-page");
+            "frodo.dotyou.cloud", "--plan", "pro-100gb");
 
         Assert.That(result.Status, Is.EqualTo(200), result.Output);
         var code = result.Json<InvitationCode>();
-        Assert.That(code, Is.EqualTo(new InvitationCode(code.Code, "frodo.dotyou.cloud", "spring \"quoted\" campaign", false, "pro-100gb", 4, 4, false)));
+        Assert.That(code, Is.EqualTo(new InvitationCode(code.Code, "frodo.dotyou.cloud", "spring \"quoted\" campaign", true, "pro-100gb", 4, 4, false)));
     }
 
     [Test]
-    public async Task CreateWithoutAnOwnerGivesAPublicPageByDefault()
+    public async Task CreateWithoutAnOwnerMakesAnOwnerlessCode()
     {
         var code = (await RunAsync("create", "--uses", "1", "--source", "booth", "--plan", "free")).Json<InvitationCode>();
 
         Assert.That(code.Owner, Is.Null);
-        Assert.That(code.EnablePublicWebPresence, Is.True);
         Assert.That(code.PlanId, Is.EqualTo("free"));
+    }
+
+    // The plan decides public web presence now (odin-core #1974), so the CLI no longer sets it
+    [TestCase("create", "--uses", "1", "--source", "x", "--plan", "free", "--no-public-page")]
+    [TestCase("edit", "K7QX-M2PD-9FHW", "--public-page")]
+    public async Task ThePublicPageFlagsAreGone(params string[] args)
+    {
+        var result = await RunAsync(args);
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Output + result.Error, Does.Contain("unknown option"));
     }
 
     [TestCase(new[] { "--source", "x", "--plan", "free" }, "usage: ./invites.sh create", TestName = "create without --uses")]
@@ -179,9 +189,9 @@ public class InvitesCliTests
 
         Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
         var lines = result.Output.Split('\n');
-        Assert.That(lines[0], Does.Match(@"^CODE +PLAN +LEFT +OWNER +SOURCE +PUBLIC PAGE$"));
-        Assert.That(lines[1], Does.Match($@"^{mine.Code} +pro-100gb +2/3 +table-owner\.dotyou\.cloud +table source +yes$"));
-        Assert.That(lines[2], Does.Match($@"^{other.Code} +free +2/2 +table-owner\.dotyou\.cloud +other +yes +disabled$"));
+        Assert.That(lines[0], Does.Match(@"^CODE +PLAN +LEFT +OWNER +SOURCE$"));
+        Assert.That(lines[1], Does.Match($@"^{mine.Code} +pro-100gb +2/3 +table-owner\.dotyou\.cloud +table source$"));
+        Assert.That(lines[2], Does.Match($@"^{other.Code} +free +2/2 +table-owner\.dotyou\.cloud +other +disabled$"));
         // The columns line up
         Assert.That(lines[1].IndexOf("pro-100gb"), Is.EqualTo(lines[0].IndexOf("PLAN")));
         Assert.That(result.Output, Does.EndWith("\n2 codes, 2 uses left on those not disabled\n"));
@@ -209,13 +219,13 @@ public class InvitesCliTests
     {
         var code = await CreateAsync(owner: "frodo.dotyou.cloud");
 
-        var edited = (await RunAsync("edit", code.Code, "--uses", "9", "--source", "autumn", "--no-owner", "--no-public-page"))
+        var edited = (await RunAsync("edit", code.Code, "--uses", "9", "--source", "autumn", "--no-owner"))
             .Json<InvitationCode>();
-        Assert.That(edited, Is.EqualTo(code with { MaxUses = 9, UsesLeft = 9, Source = "autumn", Owner = null, EnablePublicWebPresence = false }));
+        Assert.That(edited, Is.EqualTo(code with { MaxUses = 9, UsesLeft = 9, Source = "autumn", Owner = null }));
 
-        var reowned = (await RunAsync("edit", code.Code.ToLowerInvariant(), "--owner", "sam.dotyou.cloud", "--public-page"))
+        var reowned = (await RunAsync("edit", code.Code.ToLowerInvariant(), "--owner", "sam.dotyou.cloud"))
             .Json<InvitationCode>();
-        Assert.That(reowned, Is.EqualTo(edited with { Owner = "sam.dotyou.cloud", EnablePublicWebPresence = true }));
+        Assert.That(reowned, Is.EqualTo(edited with { Owner = "sam.dotyou.cloud" }));
 
         var planned = (await RunAsync("edit", code.Code, "--plan", "pro-100gb")).Json<InvitationCode>();
         Assert.That(planned, Is.EqualTo(reowned with { PlanId = "pro-100gb" }));

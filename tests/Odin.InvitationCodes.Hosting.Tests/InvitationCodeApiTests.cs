@@ -84,6 +84,17 @@ public class InvitationCodeApiTests
             new InvitationCode(created.Code, "frodo.dotyou.cloud", "spring", false, "pro-100gb", 3, 3, false)));
     }
 
+    [Test]
+    public async Task ACreateWithoutPublicWebPresenceStoresItOnForOlderHosts()
+    {
+        var response = await _admin.PostAsJsonAsync(Root + "/",
+            new { owner = (string?)null, maxUses = 1, source = "x", planId = "free" });
+        response.EnsureSuccessStatusCode();
+
+        var created = (await response.Content.ReadFromJsonAsync<InvitationCode>())!;
+        Assert.That(created.EnablePublicWebPresence, Is.True);
+    }
+
     [TestCase("not a domain", 1, "free", TestName = "a bad owner")]
     [TestCase("frodo.dotyou.cloud", 0, "free", TestName = "no uses")]
     [TestCase("frodo.dotyou.cloud", InvitationCodeStore.MaxUsesLimit + 1, "free", TestName = "too many uses")]
