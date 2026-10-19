@@ -8,7 +8,8 @@ namespace Odin.InvitationCodes.Hosting;
 /// </summary>
 /// <param name="Owner">The identity the code belongs to, if any</param>
 /// <param name="Source">Free text saying where the code came from</param>
-/// <param name="EnablePublicWebPresence">Whether an identity that signs up with the code gets a public home page</param>
+/// <param name="EnablePublicWebPresence">Whether an identity that signs up with the code gets a public home page, for
+/// identity hosts from before odin-core #1974. Later hosts ignore it: the plan decides. On unless set otherwise.</param>
 /// <param name="PlanId">The hosting plan (and so the quota) an identity that signs up with the code gets. Every code
 /// is made with one; null only on codes made before plans were required, which leave it to the identity host</param>
 /// <param name="Disabled">A disabled code cannot be used, whatever uses it has left</param>
