@@ -18,7 +18,7 @@ dotnet test
 
 `./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
 repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --plan pro-100gb --owner frodo.demo.rocks`,
-`./invites.sh list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
+`./invites.sh list` (a table; `--json` for the service's answer), `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
 
 ## Tests
 

@@ -94,7 +94,7 @@ public class InvitesCliTests
     {
         await RunAsync(new Options(WithKeys: false, Stdin: $"{InvitationCodeServer.CreateKey}\n{InvitationCodeServer.SignupKey}\n"), "setup");
 
-        var result = await RunAsync(new Options(WithKeys: false), "list");
+        var result = await RunAsync(new Options(WithKeys: false), "list", "--json");
 
         Assert.That(result.Status, Is.EqualTo(200), result.Output);
     }
@@ -158,12 +158,50 @@ public class InvitesCliTests
     {
         var mine = await CreateAsync(owner: "list-owner.dotyou.cloud");
 
-        var all = await RunAsync("list");
-        var owners = await RunAsync("list", "--owner", "LIST-owner.dotyou.cloud");
+        var all = await RunAsync("list", "--json");
+        var owners = await RunAsync("list", "--owner", "LIST-owner.dotyou.cloud", "--json");
 
         Assert.That(all.Json<List<InvitationCode>>(), Does.Contain(mine));
         Assert.That(owners.Json<List<InvitationCode>>(), Is.EqualTo(new[] { mine }));
         Assert.That((await RunAsync("list", "--owner")).ExitCode, Is.EqualTo(1));
+        Assert.That((await RunAsync("list", "--bogus")).Error, Does.Contain("unknown option: --bogus"));
+    }
+
+    [Test]
+    public async Task ListPrintsATable()
+    {
+        var mine = await CreateAsync(maxUses: 3, owner: "table-owner.dotyou.cloud", source: "table source", planId: "pro-100gb");
+        var other = await CreateAsync(maxUses: 2, owner: "table-owner.dotyou.cloud", source: "other");
+        await RunAsync("use", mine.Code);
+        await RunAsync("disable", other.Code);
+
+        var result = await RunAsync("list", "--owner", "table-owner.dotyou.cloud");
+
+        Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
+        var lines = result.Output.Split('\n');
+        Assert.That(lines[0], Does.Match(@"^CODE +PLAN +LEFT +OWNER +SOURCE +PUBLIC PAGE$"));
+        Assert.That(lines[1], Does.Match($@"^{mine.Code} +pro-100gb +2/3 +table-owner\.dotyou\.cloud +table source +yes$"));
+        Assert.That(lines[2], Does.Match($@"^{other.Code} +free +2/2 +table-owner\.dotyou\.cloud +other +yes +disabled$"));
+        // The columns line up
+        Assert.That(lines[1].IndexOf("pro-100gb"), Is.EqualTo(lines[0].IndexOf("PLAN")));
+        Assert.That(result.Output, Does.EndWith("\n2 codes, 2 uses left on those not disabled\n"));
+    }
+
+    [Test]
+    public async Task ListWithNoCodesSaysSo()
+    {
+        var result = await RunAsync("list", "--owner", "nobody-at-all.dotyou.cloud");
+
+        Assert.That(result.Output, Is.EqualTo("(no codes)\n"));
+    }
+
+    [Test]
+    public async Task ListWithAWrongKeyShowsTheRefusal()
+    {
+        var result = await RunAsync(new Options(CreateKey: "wrong"), "list");
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Output, Does.EndWith("[401]\n"));
     }
 
     [Test]

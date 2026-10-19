@@ -43,9 +43,10 @@ CREATE AND LIST CODES  (create key)
         --no-public-page       optional: people who sign up with this code do NOT get a public
                                home page on their identity. Without it, they do.
 
-  list [--owner <identity>]
-      Lists codes with how many uses each has left, and whether each is disabled: all of them, or
-      just one owner's.
+  list [--owner <identity>] [--json]
+      Lists codes as a table: plan, uses left of uses allowed, owner, source, public page, and
+      whether each is disabled. All of them, or just one owner's.
+        --json              print the service's JSON instead of the table (the table needs jq)
 
 SEE HOW CODES ARE DOING  (create key)
   stats [--since <days>] [--json]
@@ -123,6 +124,18 @@ call() { # method path [body]; sends $key
 
 code_body() { printf '{"code":%s}' "$(json_string "$1")"; }
 
+render() { # as_json path jq-program; GETs path and prints the answer through jq, or as is with --json or no jq
+  local as_json="$1" path="$2" program="$3" response status body
+  if [[ "$as_json" == true ]] || ! command -v jq >/dev/null; then
+    call GET "$path"
+    return
+  fi
+  response="$(call GET "$path")"
+  status="${response##*$'\n'}"; body="${response%$'\n'*}"
+  [[ "$status" == "[200]" ]] || { printf '%s\n%s\n' "$body" "$status"; exit 1; }
+  printf '%s' "$body" | jq -r "$program"
+}
+
 # A code for use in the URL: spaces dropped, nothing but letters, digits and dashes
 path_code() {
   local code="${1// /}"
@@ -169,15 +182,34 @@ case "$cmd" in
       "{\"owner\":$owner_json,\"maxUses\":$uses,\"source\":$(json_string "$source_text"),\"enablePublicWebPresence\":$public_page,\"planId\":$(json_string "$plan_id")}"
     ;;
   list)
-    list_usage="usage: ./invites.sh list [--owner <identity>]"
-    query=""
-    case "${1:-}" in
-      "") ;;
-      --owner) [[ -n "${2:-}" ]] || die "$list_usage"
-               query="?owner=$(printf '%s' "$2" | jq -sRr @uri 2>/dev/null || printf '%s' "$2")" ;;
-      *) die "$list_usage" ;;
-    esac
-    call GET "/$query"
+    list_usage="usage: ./invites.sh list [--owner <identity>] [--json]"
+    query=""; as_json=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --owner) [[ -n "${2:-}" ]] || die "$list_usage"
+                 query="?owner=$(printf '%s' "$2" | jq -sRr @uri 2>/dev/null || printf '%s' "$2")"; shift 2 ;;
+        --json) as_json=true; shift ;;
+        *) die "unknown option: $1" "$list_usage" ;;
+      esac
+    done
+    render "$as_json" "/$query" '
+      def pad(n): . + (" " * ([n - length, 0] | max));
+      def clip(n): if length > n then .[0:n - 3] + "..." else . end;
+      . as $codes
+      | ["CODE", "PLAN", "LEFT", "OWNER", "SOURCE", "PUBLIC PAGE", ""] as $head
+      | [$codes[] | [.code, (.planId // "-"), "\(.usesLeft)/\(.maxUses)", (.owner // "-"),
+                     (if .source == "" then "-" else .source | clip(40) end),
+                     (if .enablePublicWebPresence then "yes" else "no" end),
+                     (if .disabled then "disabled" else "" end)]] as $rows
+      | ([$head] + $rows) as $table
+      | [range(0; $head | length) as $i | [$table[][$i] | length] | max] as $widths
+      | [$codes[] | select(.disabled | not) | .usesLeft] as $left
+      | if ($rows | length) == 0 then "(no codes)"
+        else
+          ($table[] | [range(0; length) as $i | .[$i] | pad($widths[$i])] | join("  ") | sub(" +$"; "")),
+          "",
+          "\($rows | length) code\(if ($rows | length) == 1 then "" else "s" end), \($left | add // 0) uses left on those not disabled"
+        end'
     ;;
   stats)
     stats_usage="usage: ./invites.sh stats [--since <days>] [--json]"
@@ -190,14 +222,7 @@ case "$cmd" in
         *) die "unknown option: $1" "$stats_usage" ;;
       esac
     done
-    if [[ "$as_json" == true ]] || ! command -v jq >/dev/null; then
-      call GET "/stats$query"
-      exit 0
-    fi
-    response="$(call GET "/stats$query")"
-    status="${response##*$'\n'}"; body="${response%$'\n'*}"
-    [[ "$status" == "[200]" ]] || { printf '%s\n%s\n' "$body" "$status"; exit 1; }
-    printf '%s' "$body" | jq -r '
+    render "$as_json" "/stats$query" '
       def left(n): tostring | . + (" " * ([n - length, 0] | max));
       def right(n): tostring | (" " * ([n - length, 0] | max)) + .;
       def row(name): "  " + (name | left(34)) + (.codes | right(7)) + (.usesAllowed | right(9)) + (.signups | right(9)) + (.usesLeft | right(7));
