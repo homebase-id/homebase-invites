@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Odin.InvitationCodes.Hosting.Tests;
 
@@ -10,7 +11,9 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 /// <see cref="StartOnKestrel"/> puts it on a real port for clients outside the process, like invites.sh.
 /// </summary>
 /// <param name="requestsPerMinutePerIp">High by default, so only the rate-limit tests meet the limit</param>
-public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) : WebApplicationFactory<Program>
+/// <param name="upgradePage">Whether the upgrade page is on (PlanService:PublicDomain set)</param>
+public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, bool upgradePage = true)
+    : WebApplicationFactory<Program>
 {
     /// <summary>The identity hosts the service knows, faked: <see cref="IdentityHosts"/> answers for them</summary>
     public static readonly string[] Hosts = ["provisioning.one.example", "provisioning.two.example"];
@@ -19,12 +22,23 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) :
     public const string CreateKey = "test-create-key";
     public const string Root = "/api/v1/invitation-codes";
 
+    /// <summary>The service's own domain: its YouAuth client id, and where the upgrade page is</summary>
+    public const string PublicDomain = "invites.test.example";
+
     private readonly string _path = TempDatabase.NewPath();
 
     public FakeIdentityHosts IdentityHosts { get; } = new();
 
+    /// <summary>The identities' YouAuth endpoints, faked</summary>
+    public FakeYouAuthIdentity YouAuthIdentity { get; } = new();
+
+    public MovableTime Time { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Not Development: appsettings.Development.json would add its own plan service settings (the upgrade
+        // page on, a host list), and every setting a test needs is set here
+        builder.UseEnvironment("Test");
         builder.UseSetting("InvitationCodes:DatabasePath", _path);
         builder.UseSetting("InvitationCodes:SignupApiKey", SignupKey);
         builder.UseSetting("InvitationCodes:CreateApiKey", CreateKey);
@@ -34,8 +48,24 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) :
             builder.UseSetting($"PlanService:Hosts:{i}", Hosts[i]);
         }
         builder.UseSetting("PlanService:ApiKey", FakeIdentityHosts.PlanKey);
-        builder.ConfigureServices(services => services.AddHttpClient(PlanService.HttpClientName)
-            .ConfigurePrimaryHttpMessageHandler(() => IdentityHosts));
+        if (upgradePage)
+        {
+            builder.UseSetting("PlanService:PublicDomain", PublicDomain);
+            builder.UseSetting("PlanService:DisplayName", "Test Hosting");
+            builder.UseSetting("PlanService:PlansForSale:0:Id", "veterans");
+            builder.UseSetting("PlanService:PlansForSale:0:Name", "Veterans");
+            builder.UseSetting("PlanService:PlansForSale:0:Description", "1 TB and a public home page");
+            builder.UseSetting("PlanService:PlansForSale:0:Price", "$5 a month");
+            builder.UseSetting("PlanService:PlansForSale:1:Id", "registered");
+            builder.UseSetting("PlanService:PlansForSale:1:Name", "Registered");
+        }
+        builder.ConfigureServices(services =>
+        {
+            services.AddHttpClient(PlanService.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => IdentityHosts);
+            services.AddHttpClient(YouAuthLogin.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => YouAuthIdentity);
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(Time);
+        });
     }
 
     /// <summary>
@@ -47,6 +77,16 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) :
         StartServer();
         return ClientOptions.BaseAddress.ToString().TrimEnd('/');
     }
+
+    /// <summary>
+    /// A browser on the upgrade page: on the service's public domain over https, keeping cookies, not following
+    /// redirects (a test follows them, so it can play the identity in between)
+    /// </summary>
+    public HttpClient Browser() => CreateClient(new WebApplicationFactoryClientOptions
+    {
+        BaseAddress = new Uri($"https://{PublicDomain}"),
+        AllowAutoRedirect = false,
+    });
 
     /// <summary>
     /// A client that sends <paramref name="key"/> as the API key; none when it is null

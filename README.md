@@ -114,6 +114,40 @@ curl -X POST https://<service>/api/v1/plans/grants/ \
   -d '{"identity":"frodo.demo.rocks","planId":"veterans","source":"admin"}'
 ```
 
+## Upgrade page
+
+Where an owner gets a bigger plan. Their owner console sends them to
+`https://<PlanService__PublicDomain>/upgrade?id=<identity>&host=<provisioning domain>` (set odin-core's
+`Registry__UpgradeUrl` to `https://<PlanService__PublicDomain>/upgrade`; the host adds `id` and `host`).
+
+1. **Sign in with YouAuth**, as a domain client, done on this server (odin-core
+   `docs/youauth-unified-authorization.md`). The service makes a P-384 key pair and a single-use state that
+   lasts 10 minutes, kept in the database with the private key sealed by data protection, and sends the browser
+   to `https://<identity>/api/owner/v1/youauth/authorize` (`client_id` = the public domain, `client_type=domain`,
+   `cipher=aes-gcm`). The owner is usually already signed in to their identity, so there is no password; the
+   first time there is a consent screen naming this service.
+2. **Callback** (`/upgrade/youauth-callback`): the state is taken once; the service derives the exchange secret,
+   trades its digest at `https://<identity>/api/owner/v1/youauth/token`, and opens the token (AES-GCM; an
+   identity answering `aes-cbc` is refused as a downgrade). A token that opens is the proof the owner of that
+   identity is here. The session is a data-protected cookie on `/upgrade`, for an hour.
+3. **The page** shows the identity's plan (asked of its host, as grants find it) and the plans for sale, each
+   with a **Buy** button.
+4. **Buy is a stand-in for payment**: it makes a `purchase` grant for the plan (see Plan grants), which sets it on
+   the identity's host straight away or keeps trying. A plan not in `PlanService__PlansForSale` cannot be bought.
+
+`/.well-known/youauth-client.json` names the service (`PlanService__DisplayName`) and its callback, so the
+identity's consent screen shows the name and accepts no other callback.
+
+Security:
+
+- `id` and `host` are hints anyone can write into a link. The identity is the one the service stored with the
+  state and then completed the token exchange with, never `id` or the callback's `identity`; `host` is used only
+  if it is a known host, and only to decide which host to ask first.
+- Forms carry an antiforgery token; the session and antiforgery cookies are `Secure`, `HttpOnly`, on `/upgrade`.
+- The data-protection keys are in the database (`data_protection_keys`), so sessions and logins in progress
+  survive a restart. They are not encrypted at rest (the service logs a warning saying so): protect the
+  database file.
+
 ## Configuration
 
 | Key | Value |
@@ -126,6 +160,9 @@ curl -X POST https://<service>/api/v1/plans/grants/ \
 | `PlanService__ApiKey` | required with hosts; the plan key, the same on every host (odin-core `Registry__PlanService__ApiKey`). Give it only to Homebase-run hosts |
 | `PlanService__RetryIntervalSeconds` | optional, default 60; how often due grants are tried |
 | `PlanService__ReconcileIntervalHours` | optional, default 24 |
+| `PlanService__PublicDomain` | optional; the service's own public domain, e.g. `invites.ravenhosting.cloud`: its YouAuth client id and where `/upgrade` is. None: the upgrade page is off (404) |
+| `PlanService__DisplayName` | optional; what the identity's consent screen calls the service. Defaults to the public domain |
+| `PlanService__PlansForSale__0__Id`, `__Name`, `__Description`, `__Price`, ... | optional; the plans the upgrade page sells. `Id` is a plan Id on the identity hosts; `Price` is only shown. Needs `PublicDomain` |
 
 SQLite means **one instance**, and the database file should be backed up.
 
@@ -142,6 +179,8 @@ never to self-hosted servers.
 
 - Grants are kept in this service: it now holds which identities were given which plans, and why.
 - The plan key lets its holder set any identity's plan on every host; it cannot do anything else there.
+- The upgrade page takes no payment: Buy grants the plan. It must not be turned on for real owners until payment
+  replaces the stand-in.
 
 - Requests are limited per client IP. Only odin-core can limit the people behind its public signup page, so
   that limit belongs there.

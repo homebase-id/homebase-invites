@@ -2,13 +2,16 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.HttpOverrides;
 using Odin.InvitationCodes.Hosting;
 
 // The invitation-code service (#1908): holds the codes and counts their uses. The identity hosts call it with
 // the signup key to check and use a code at signup; admins call it with the create key to create and list.
 // It also grants plans: it sets the plan an identity is owed on the identity host that serves it, with the plan
-// key (README, "Plan grants").
+// key (README, "Plan grants"). Owners buy bigger plans on the upgrade page, after signing in with YouAuth (README,
+// "Upgrade page").
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,6 +30,22 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PlanService>();
 builder.Services.AddHostedService<PlanGrantWorker>();
 builder.Services.AddHttpClient(PlanService.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
+
+// The upgrade page: YouAuth logins in progress and the keys sealing them and its session cookie, in the database
+var loginStore = new YouAuthLoginStore(databasePath);
+builder.Services.AddSingleton(loginStore);
+builder.Services.AddSingleton(UpgradeOptions.FromConfiguration(builder.Configuration));
+builder.Services.AddDataProtection().SetApplicationName("homebase-invites");
+builder.Services.Configure<KeyManagementOptions>(options => options.XmlRepository = loginStore);
+builder.Services.AddSingleton<YouAuthLogin>();
+builder.Services.AddSingleton<UpgradeSession>();
+builder.Services.AddHttpClient(YouAuthLogin.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddAntiforgery(options =>
+{
+    options.Cookie.Name = "homebase_upgrade_antiforgery";
+    options.Cookie.Path = UpgradePage.Root;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+});
 
 // Every real request is well under 1 KB
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.Limits.MaxRequestBodySize = InvitationCodeApi.MaxRequestBodySize);
@@ -54,8 +73,11 @@ var app = builder.Build();
 app.UseForwardedHeaders();
 app.UseRateLimiter();
 app.Use(InvitationCodeApi.RequireApiKey);
+app.UseAntiforgery();
 
 app.MapGet("/ping", () => "pong");
+
+UpgradePage.Map(app);
 
 var root = app.MapGroup(InvitationCodeApi.Root).AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid);
 
