@@ -36,6 +36,9 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Not Development: appsettings.Development.json would add its own plan service settings (the upgrade
+        // page on, a host list), and every setting a test needs is set here
+        builder.UseEnvironment("Test");
         builder.UseSetting("InvitationCodes:DatabasePath", _path);
         builder.UseSetting("InvitationCodes:SignupApiKey", SignupKey);
         builder.UseSetting("InvitationCodes:CreateApiKey", CreateKey);
