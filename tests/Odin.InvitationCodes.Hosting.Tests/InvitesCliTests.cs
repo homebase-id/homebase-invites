@@ -53,7 +53,7 @@ public class InvitesCliTests
         var result = await RunAsync("help");
 
         Assert.That(result.ExitCode, Is.EqualTo(0));
-        foreach (var command in new[] { "setup", "ping", "create", "list", "stats", "edit", "disable", "enable", "validate", "use", "undo" })
+        foreach (var command in new[] { "setup", "ping", "create", "list", "stats", "edit", "disable", "enable", "grant", "grants", "retry", "validate", "use", "undo" })
         {
             Assert.That(result.Output, Does.Contain($"  {command}"), command);
         }
@@ -324,6 +324,58 @@ public class InvitesCliTests
 
         Assert.That(result.ExitCode, Is.EqualTo(1));
         Assert.That(result.Output, Does.EndWith("[401]\n"));
+    }
+
+    //
+    // Plan grants
+    //
+
+    [Test]
+    public async Task GrantSetsThePlanOnTheIdentitysHost()
+    {
+        var host = InvitationCodeServer.Hosts[1];
+        _server.IdentityHosts.Serve(host, "grant-frodo.dotyou.cloud");
+
+        var result = await RunAsync("grant", "--id", "grant-frodo.dotyou.cloud", "--plan", "veterans", "--host", host,
+            "--reference", "cli-pay-1");
+
+        Assert.That(result.Status, Is.EqualTo(200), result.Output);
+        var grant = result.Json<PlanGrant>();
+        Assert.That((grant.Status, grant.Host, grant.Reference), Is.EqualTo(("applied", host, "cli-pay-1")));
+        Assert.That(_server.IdentityHosts.PlanOn(host, "grant-frodo.dotyou.cloud"), Is.EqualTo("veterans"));
+    }
+
+    [TestCase(new[] { "--plan", "veterans" }, "usage: ./invites.sh grant", TestName = "grant without --id")]
+    [TestCase(new[] { "--id", "frodo.dotyou.cloud" }, "usage: ./invites.sh grant", TestName = "grant without --plan")]
+    [TestCase(new[] { "--id", "frodo.dotyou.cloud", "--plan" }, "usage: ./invites.sh grant", TestName = "grant with --plan and no plan")]
+    [TestCase(new[] { "--id", "frodo.dotyou.cloud", "--plan", "veterans", "--bogus" }, "unknown option: --bogus", TestName = "grant with an unknown option")]
+    public async Task GrantRefusesBadArguments(string[] arguments, string message)
+    {
+        var result = await RunAsync(["grant", .. arguments]);
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Error, Does.Contain(message));
+    }
+
+    [Test]
+    public async Task GrantsPrintsATableAndRetryTriesAgain()
+    {
+        var pending = (await RunAsync("grant", "--id", "grants-sam.dotyou.cloud", "--plan", "registered")).Json<PlanGrant>();
+        Assert.That(pending.Status, Is.EqualTo("pending"));
+
+        var table = await RunAsync("grants", "--id", "grants-sam.dotyou.cloud");
+        var lines = table.Output.Split('\n');
+        Assert.That(lines[0], Does.Match(@"^ID +IDENTITY +PLAN +STATUS +HOST +TRIES +LAST ERROR$"));
+        Assert.That(lines[1], Does.Match($@"^{pending.Id} +grants-sam\.dotyou\.cloud +registered +pending +- +1 +no known host serves"));
+
+        _server.IdentityHosts.Serve(InvitationCodeServer.Hosts[0], "grants-sam.dotyou.cloud");
+        var retried = await RunAsync("retry", pending.Id.ToString());
+        Assert.That(retried.Json<PlanGrant>().Status, Is.EqualTo("applied"));
+
+        var applied = await RunAsync("grants", "--status", "applied", "--json");
+        Assert.That(applied.Json<List<PlanGrant>>().Select(g => g.Id), Does.Contain(pending.Id));
+        Assert.That((await RunAsync("grants", "--status", "lost")).Error, Does.Contain("--status must be pending, applied or failed"));
+        Assert.That((await RunAsync("retry", "x")).Error, Does.Contain("usage: ./invites.sh retry"));
     }
 
     //
