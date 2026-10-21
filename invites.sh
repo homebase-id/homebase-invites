@@ -14,6 +14,7 @@ CONFIG="$HOME/.homebase-invites"
 [[ -f "$CONFIG" ]] && source "$CONFIG"
 URL="${HOMEBASE_INVITES_URL:-https://invites.ravenhosting.cloud}"
 API="$URL/api/v1/invitation-codes"
+GRANTS="$URL/api/v1/plans/grants"
 
 usage() {
   cat <<EOF
@@ -72,6 +73,24 @@ CHANGE A CODE  (create key)
   enable <code>
       Lets a disabled code work again.
 
+GRANT A PLAN  (create key)
+  grant --id <identity> --plan <plan id> [--host <provisioning domain>] [--reference <ref>]
+      Owes an identity a plan and sets it on the identity host that serves it, straight away. If no
+      host can take it yet, the grant stays pending and the service keeps trying.
+        --id <identity>        required: e.g. frodo.demo.rocks
+        --plan <plan id>       required: a plan the identity hosts have, e.g. veterans
+        --host <domain>        optional: the provisioning domain of the identity's host, tried
+                               first; only hosts the service knows are ever called
+        --reference <ref>      optional: your id for it; the same reference twice is one grant
+
+  grants [--id <identity>] [--status pending|applied|failed] [--json]
+      Lists grants, newest first, as a table: id, identity, plan, status, host, attempts and the
+      last error. "failed" means the host refused the plan; "pending" is retried by itself.
+        --json              print the service's JSON instead of the table (the table needs jq)
+
+  retry <grant id>
+      Tries a pending or failed grant again now, e.g. after the plan was added to the host.
+
 TEST A CODE  (signup key; odin-core does these during a real signup)
   validate <code>
       Says whether the code exists, is not disabled, and still has a use left. Does not use it up.
@@ -98,8 +117,14 @@ EXAMPLES
   ./invites.sh disable K7QX-M2PD-9FHW
   ./invites.sh validate K7QX-M2PD-9FHW
 
+  ./invites.sh grant --id frodo.demo.rocks --plan veterans
+      give frodo the veterans plan on whichever host serves frodo
+
+  ./invites.sh grants --status pending
+
 Every command prints the service's answer and the HTTP status, e.g. [200]. [401] means a wrong or
-missing key; [400] means bad input, and the message says what; [404] on edit means no such code.
+missing key; [400] means bad input, and the message says what; [404] on edit means no such code;
+[409] on grant means the reference is another grant's, on retry that the grant is already applied.
 EOF
 }
 
@@ -112,11 +137,11 @@ check_uses() { [[ "$1" =~ ^[0-9]+$ ]] || die "--uses must be a number, e.g. --us
 # A JSON string, quotes included
 json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
-call() { # method path [body]; sends $key
+call() { # method path [body]; sends $key, to $base (the codes API unless set)
   local method="$1" path="$2" body="${3:-}"
   local args=(-sS -X "$method" -H "Odin-Api-Key: $key" -w '\n[%{http_code}]\n')
   [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' -d "$body")
-  curl "${args[@]}" "$API$path"
+  curl "${args[@]}" "${base:-$API}$path"
 }
 
 code_body() { printf '{"code":%s}' "$(json_string "$1")"; }
@@ -144,7 +169,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  create|list|stats|edit|disable|enable) need HOMEBASE_INVITES_CREATE_KEY; key="$HOMEBASE_INVITES_CREATE_KEY" ;;
+  create|list|stats|edit|disable|enable|grant|grants|retry) need HOMEBASE_INVITES_CREATE_KEY; key="$HOMEBASE_INVITES_CREATE_KEY" ;;
   validate|use|undo) need HOMEBASE_INVITES_SIGNUP_KEY; key="$HOMEBASE_INVITES_SIGNUP_KEY" ;;
 esac
 
@@ -268,6 +293,54 @@ case "$cmd" in
     code="$(path_code "${1:-}")" || die "usage: ./invites.sh $cmd <code>"
     disabled=false; [[ "$cmd" == disable ]] && disabled=true
     call PATCH "/$code" "{\"disabled\":$disabled}"
+    ;;
+  grant)
+    grant_usage="usage: ./invites.sh grant --id <identity> --plan <plan id> [--host <provisioning domain>] [--reference <ref>]  (see ./invites.sh help)"
+    fields=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --id|--plan|--host|--reference)
+          [[ -n "${2:-}" ]] || die "$grant_usage"
+          case "$1" in
+            --id) name=identity ;; --plan) name=planId ;; --host) name=host ;; --reference) name=reference ;;
+          esac
+          fields+=("\"$name\":$(json_string "$2")"); shift 2 ;;
+        *) die "unknown option: $1" "$grant_usage" ;;
+      esac
+    done
+    [[ " ${fields[*]-} " == *'"identity":'* && " ${fields[*]-} " == *'"planId":'* ]] || die "$grant_usage"
+    base="$GRANTS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  grants)
+    grants_usage="usage: ./invites.sh grants [--id <identity>] [--status pending|applied|failed] [--json]"
+    query=(); as_json=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --id) [[ -n "${2:-}" ]] || die "$grants_usage"
+              query+=("identity=$(printf '%s' "$2" | jq -sRr @uri 2>/dev/null || printf '%s' "$2")"); shift 2 ;;
+        --status) [[ "${2:-}" =~ ^(pending|applied|failed)$ ]] || die "--status must be pending, applied or failed"
+                  query+=("status=$2"); shift 2 ;;
+        --json) as_json=true; shift ;;
+        *) die "unknown option: $1" "$grants_usage" ;;
+      esac
+    done
+    qs=""; [[ ${#query[@]} -gt 0 ]] && qs="?$(IFS='&'; echo "${query[*]}")"
+    base="$GRANTS" render "$as_json" "/$qs" '
+      def pad(n): . + (" " * ([n - length, 0] | max));
+      def clip(n): if length > n then .[0:n - 3] + "..." else . end;
+      . as $grants
+      | ["ID", "IDENTITY", "PLAN", "STATUS", "HOST", "TRIES", "LAST ERROR"] as $head
+      | [$grants[] | ["\(.id)", .identity, .planId, .status, (.host // .hostHint // "-"), "\(.attempts)",
+                      ((.lastError // "") | clip(60))]] as $rows
+      | ([$head] + $rows) as $table
+      | [range(0; $head | length) as $i | [$table[][$i] | length] | max] as $widths
+      | if ($rows | length) == 0 then "(no grants)"
+        else ($table[] | [range(0; length) as $i | .[$i] | pad($widths[$i])] | join("  ") | sub(" +$"; ""))
+        end'
+    ;;
+  retry)
+    [[ "${1:-}" =~ ^[0-9]+$ ]] || die "usage: ./invites.sh retry <grant id>"
+    base="$GRANTS" call POST "/$1/retry"
     ;;
   validate|use|undo)
     path="/$cmd"; [[ "$cmd" == undo ]] && path=/undo-use

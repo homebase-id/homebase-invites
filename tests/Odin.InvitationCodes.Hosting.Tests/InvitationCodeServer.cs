@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Odin.InvitationCodes.Hosting.Tests;
 
@@ -11,11 +12,16 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 /// <param name="requestsPerMinutePerIp">High by default, so only the rate-limit tests meet the limit</param>
 public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) : WebApplicationFactory<Program>
 {
+    /// <summary>The identity hosts the service knows, faked: <see cref="IdentityHosts"/> answers for them</summary>
+    public static readonly string[] Hosts = ["provisioning.one.example", "provisioning.two.example"];
+
     public const string SignupKey = "test-signup-key";
     public const string CreateKey = "test-create-key";
     public const string Root = "/api/v1/invitation-codes";
 
     private readonly string _path = TempDatabase.NewPath();
+
+    public FakeIdentityHosts IdentityHosts { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -23,6 +29,13 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000) :
         builder.UseSetting("InvitationCodes:SignupApiKey", SignupKey);
         builder.UseSetting("InvitationCodes:CreateApiKey", CreateKey);
         builder.UseSetting("InvitationCodes:RequestsPerMinutePerIp", requestsPerMinutePerIp.ToString());
+        for (var i = 0; i < Hosts.Length; i++)
+        {
+            builder.UseSetting($"PlanService:Hosts:{i}", Hosts[i]);
+        }
+        builder.UseSetting("PlanService:ApiKey", FakeIdentityHosts.PlanKey);
+        builder.ConfigureServices(services => services.AddHttpClient(PlanService.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => IdentityHosts));
     }
 
     /// <summary>

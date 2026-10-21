@@ -405,10 +405,6 @@ public class InvitationCodeStore
             reader.GetBoolean(7));
     }
 
-    // Two or more labels of letters, digits and inner hyphens, each 1-63 long
-    private static readonly Regex DomainName =
-        new(@"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", RegexOptions.Compiled);
-
     // A plan id is a name the identity hosts know, e.g. "free" or "pro-100gb"
     private static readonly Regex PlanIdFormat = new(@"^[A-Za-z0-9._-]{1,64}$", RegexOptions.Compiled);
 
@@ -420,15 +416,8 @@ public class InvitationCodeStore
         }
     }
 
-    private static string NormalizeOwner(string owner)
-    {
-        var normalized = owner.Trim().ToLowerInvariant();
-        if (normalized.Length > 253 || !DomainName.IsMatch(normalized))
-        {
-            throw new InvalidInvitationCodeRequestException("Invalid owner");
-        }
-        return normalized;
-    }
+    private static string NormalizeOwner(string owner) =>
+        DomainNames.Normalize(owner) ?? throw new InvalidInvitationCodeRequestException("Invalid owner");
 
     private static string NormalizePlanId(string? planId)
     {

@@ -18,7 +18,7 @@ dotnet test
 
 `./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
 repo, readable only by you); then `./invites.sh create --uses 5 --source "spring campaign" --plan pro-100gb --owner frodo.demo.rocks`,
-`./invites.sh list` (a table; `--json` for the service's answer), `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`. `./invites.sh help` explains each command and its arguments.
+`./invites.sh list` (a table; `--json` for the service's answer), `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`, and for plans `grant --id frodo.demo.rocks --plan veterans`, `grants`, `retry`. `./invites.sh help` explains each command and its arguments.
 
 ## Tests
 
@@ -67,6 +67,53 @@ curl -X POST https://<service>/api/v1/invitation-codes/ \
   -d '{"owner":"frodo.demo.rocks","maxUses":5,"source":"spring campaign","planId":"pro-100gb"}'
 ```
 
+## Plan grants
+
+The service also gives identities plans: a **grant** says identity X is owed plan P, and the service sets it on
+the identity host that serves X. Admins make grants now (`./invites.sh grant`); the payment flow will make
+`purchase` grants the same way, once payment is taken. A plan is set only through a grant, never by a link.
+
+### Finding the host
+
+The service knows the identity hosts by their provisioning domains (`PlanService__Hosts`), and calls only those,
+with the one plan key they all take (`PlanService__ApiKey`; odin-core's `Registry__PlanService__ApiKey`). To find
+the host that serves X it asks, in order: the host the request named (`host`, only if it is a known one; owner
+consoles send it as `?host=` in the upgrade link), the host that last had X, then every other known host. The
+first to answer `200` has it; `404` means not there. The host API (odin-core, on the provisioning domain):
+
+| Call | Answer |
+|---|---|
+| `GET /api/plans/v1/identities/<identity>` | `{domain, planId}`; 404 if the host does not serve it |
+| `PUT /api/plans/v1/identities/<identity>/plan {planId, reference}` | `{domain, planId}`; 400 for a plan the host does not have; 404 as above. Setting the plan it already has changes nothing |
+
+### Statuses
+
+| Status | |
+|---|---|
+| `pending` | not set yet: no host has the identity, a host is down, or it answered something else. Tried again after 1, 2, 4... minutes, at most every 6 hours, for as long as it takes: a paid plan is never given up on |
+| `applied` | the host has it; `host` says which, `appliedAt` when |
+| `failed` | the host refused the plan (`400`: not one of its plans). Not retried by itself; fix the plan on the host, then `retry` |
+
+A background task tries due grants every minute (`PlanService__RetryIntervalSeconds`) and, once a day
+(`PlanService__ReconcileIntervalHours`), reconciles: for each identity it asks the host for the plan it has, and
+if that is not the plan of its latest applied grant, sets it back. So a plan changed by hand on a host with
+`odin-admin tenant set-plan` is undone the next day for an identity that has a grant; give such an identity a
+new grant instead.
+
+### API (`/api/v1/plans/grants`, create key)
+
+| Call | Answer |
+|---|---|
+| `POST / {identity, planId, source?, reference?, host?}` | the grant, after trying to set it straight away. `source` is `code`, `purchase` or `admin` (the default); `reference` is the caller's id for it, e.g. a payment id, made up when left out. The same `reference` again is the same grant (not set twice); for another identity or plan it is a 409 |
+| `GET /?identity=<odinId>&status=<status>` | the grants, newest first; both filters optional |
+| `POST /<id>/retry` | tries a pending or failed grant again now; 404 if there is none, 409 if it is already applied |
+
+```bash
+curl -X POST https://<service>/api/v1/plans/grants/ \
+  -H 'Odin-Api-Key: <create key>' -H 'Content-Type: application/json' \
+  -d '{"identity":"frodo.demo.rocks","planId":"veterans","source":"admin"}'
+```
+
 ## Configuration
 
 | Key | Value |
@@ -75,6 +122,10 @@ curl -X POST https://<service>/api/v1/invitation-codes/ \
 | `InvitationCodes__SignupApiKey` | required; the signup key, for the identity hosts |
 | `InvitationCodes__CreateApiKey` | required; the create key, for admins |
 | `InvitationCodes__RequestsPerMinutePerIp` | optional, default 300; more than that from one client is a 429 |
+| `PlanService__Hosts__0`, `__1`, ... | optional; the identity hosts' provisioning domains, e.g. `provisioning.demo.dominion.id`. None: grants stay pending |
+| `PlanService__ApiKey` | required with hosts; the plan key, the same on every host (odin-core `Registry__PlanService__ApiKey`). Give it only to Homebase-run hosts |
+| `PlanService__RetryIntervalSeconds` | optional, default 60; how often due grants are tried |
+| `PlanService__ReconcileIntervalHours` | optional, default 24 |
 
 SQLite means **one instance**, and the database file should be backed up.
 
@@ -88,6 +139,9 @@ signup key to Homebase-run identity hosts only (`Registry__InvitationCodeService
 never to self-hosted servers.
 
 ## Known gaps
+
+- Grants are kept in this service: it now holds which identities were given which plans, and why.
+- The plan key lets its holder set any identity's plan on every host; it cannot do anything else there.
 
 - Requests are limited per client IP. Only odin-core can limit the people behind its public signup page, so
   that limit belongs there.
