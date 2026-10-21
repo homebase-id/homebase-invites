@@ -6,8 +6,8 @@ using System.Web;
 namespace Odin.InvitationCodes.Hosting.Tests;
 
 /// <summary>
-/// The upgrade page in process: YouAuth sign-in against a faked identity, the plans for sale, and buying one, which
-/// sets it on the faked identity host
+/// The upgrade page in process: YouAuth sign-in against a faked identity, then choose, confirm, the test checkout,
+/// and done, which sets the plan on the faked identity host
 /// </summary>
 public class UpgradePageTests
 {
@@ -72,11 +72,69 @@ public class UpgradePageTests
     {
         var page = await SignInAsync();
 
-        Assert.That(page, Does.Contain($"Signed in as {Frodo}"));
-        Assert.That(page, Does.Contain("Your plan: <strong>free</strong>"));
-        Assert.That(page, Does.Contain("Buy Veterans"));
-        Assert.That(page, Does.Contain("$5 a month"));
-        Assert.That(page, Does.Contain("Buy Registered"));
+        Assert.That(page, Does.Contain($"Signed in as <strong>{Frodo}</strong>"));
+        Assert.That(page, Does.Contain("Your plan: <strong>free</strong>"), "free is not for sale, so it is named above the cards");
+        Assert.That(page, Does.Contain("Choose Veterans"));
+        Assert.That(page, Does.Contain("Choose Registered"));
+        Assert.That(page, Does.Not.Contain("$5 a month"), "no prices");
+    }
+
+    [Test]
+    public async Task TheCurrentPlansCardIsMarkedAndCannotBeChosen()
+    {
+        _server.IdentityHosts.Serve(InvitationCodeServer.Hosts[0], Frodo, "veterans");
+
+        var page = await SignInAsync();
+
+        Assert.That(page, Does.Contain("class=\"card current\""));
+        Assert.That(page, Does.Contain("Your plan</p>"));
+        Assert.That(page, Does.Not.Contain("Choose Veterans"));
+        Assert.That(page, Does.Contain("Choose Registered"));
+        Assert.That(page, Does.Not.Contain("Your plan: <strong>"), "the current plan is a card, not a line above them");
+    }
+
+    [Test]
+    public async Task ConfirmNamesTheChange()
+    {
+        await SignInAsync();
+
+        var response = await _browser.GetAsync("/upgrade/confirm?plan=veterans");
+        var html = await response.Content.ReadAsStringAsync();
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(html, Does.Contain("Change your plan from <strong>free</strong> to"));
+        Assert.That(html, Does.Contain("<h2>Veterans</h2>"));
+        Assert.That(html, Does.Contain("/upgrade/checkout?plan=veterans"));
+    }
+
+    [TestCase("/upgrade/confirm?plan=tiny-test")]
+    [TestCase("/upgrade/checkout?plan=tiny-test")]
+    [TestCase("/upgrade/confirm")]
+    public async Task APlanNotForSaleIsAFriendly400(string path)
+    {
+        await SignInAsync();
+
+        var response = await _browser.GetAsync(path);
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(await response.Content.ReadAsStringAsync(), Does.Contain("That plan is not for sale"));
+    }
+
+    [Test]
+    public async Task TheCheckoutSaysItIsATest_AndItsCardFieldsAreNeverSent()
+    {
+        await SignInAsync();
+
+        var html = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
+
+        Assert.That(html, Does.Contain("Test checkout"));
+        Assert.That(html, Does.Contain("no payment is taken"));
+        Assert.That(html, Does.Contain("Complete purchase"));
+        Assert.That(html, Does.Contain("Card number"));
+        var form = Regex.Match(html, "<form method=\"post\" action=\"/upgrade/checkout\".*?</form>", RegexOptions.Singleline).Value;
+        var names = Regex.Matches(form, "name=\"([^\"]+)\"").Select(m => m.Groups[1].Value);
+        Assert.That(names, Is.EquivalentTo(new[] { "__RequestVerificationToken", "planId" }),
+            "the card fields have no names, so the browser never sends them");
     }
 
     [Test]
@@ -148,55 +206,82 @@ public class UpgradePageTests
     }
 
     [Test]
-    public async Task BuyingAPlanForSaleSetsItOnTheIdentitysHost()
+    public async Task CompletingTheCheckoutSetsThePlanOnTheIdentitysHost()
     {
-        var page = await SignInAsync();
+        await SignInAsync();
+        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
 
-        var response = await PostFormAsync("/upgrade/buy", page, ("planId", "veterans"));
+        // Card values a browser could send anyway are ignored, and kept nowhere
+        var response = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "veterans"),
+            ("cardNumber", "4242424242424242"), ("cvc", "123"));
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-        Assert.That(await response.Content.ReadAsStringAsync(), Does.Contain($"{Frodo} is now on Veterans"));
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Redirect));
+        Assert.That(response.Headers.Location!.ToString(), Does.StartWith("/upgrade/done?grant="));
         Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[0], Frodo), Is.EqualTo("veterans"));
 
         using var admin = _server.ClientWithKey(InvitationCodeServer.CreateKey);
-        var grants = await admin.GetFromJsonAsync<List<PlanGrant>>($"/api/v1/plans/grants?identity={Frodo}");
+        var grantsJson = await admin.GetStringAsync($"/api/v1/plans/grants?identity={Frodo}");
+        var grants = System.Text.Json.JsonSerializer.Deserialize<List<PlanGrant>>(grantsJson,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         Assert.That(grants!.Single().Source, Is.EqualTo(PlanGrantSource.Purchase));
         Assert.That(grants!.Single().Status, Is.EqualTo(PlanGrantStatus.Applied));
+        Assert.That(grantsJson, Does.Not.Contain("4242424242424242"));
+
+        var done = await _browser.GetAsync(response.Headers.Location!.ToString());
+        var html = await done.Content.ReadAsStringAsync();
+        Assert.That(done.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(html, Does.Contain("You&#x27;re on Veterans").Or.Contain("You're on Veterans"));
+        Assert.That(html, Does.Contain($"href=\"https://{Frodo}/owner/settings/plan\""), "back to the identity's plan page");
     }
 
     [Test]
     public async Task APlanNotForSaleCannotBeBought()
     {
-        var page = await SignInAsync();
+        await SignInAsync();
+        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
 
-        var response = await PostFormAsync("/upgrade/buy", page, ("planId", "tiny-test"));
+        var response = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "tiny-test"));
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
         Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[0], Frodo), Is.EqualTo("free"));
     }
 
     [Test]
-    public async Task BuyingNeedsASignedInOwner()
+    public async Task CheckingOutNeedsASignedInOwner()
     {
         var page = await SignInAsync();
         Assert.That((await PostFormAsync("/upgrade/sign-out", page)).StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
-        var response = await PostFormAsync("/upgrade/buy", page, ("planId", "veterans"));
+        var response = await PostFormAsync("/upgrade/checkout", page, ("planId", "veterans"));
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
         Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[0], Frodo), Is.EqualTo("free"));
     }
 
     [Test]
-    public async Task BuyingNeedsTheFormsAntiforgeryToken()
+    public async Task CheckingOutNeedsTheFormsAntiforgeryToken()
     {
         await SignInAsync();
 
-        var response = await _browser.PostAsync("/upgrade/buy",
+        var response = await _browser.PostAsync("/upgrade/checkout",
             new FormUrlEncodedContent([new("planId", "veterans")]));
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
         Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[0], Frodo), Is.EqualTo("free"));
+    }
+
+    [Test]
+    public async Task AnotherIdentitysPurchaseIsNotFound()
+    {
+        using var admin = _server.ClientWithKey(InvitationCodeServer.CreateKey);
+        var other = await admin.PostAsJsonAsync("/api/v1/plans/grants/",
+            new { identity = "sam.dotyou.cloud", planId = "veterans", source = "purchase" });
+        var grant = (await other.Content.ReadFromJsonAsync<PlanGrant>())!;
+        await SignInAsync();
+
+        var response = await _browser.GetAsync($"/upgrade/done?grant={grant.Id}");
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]

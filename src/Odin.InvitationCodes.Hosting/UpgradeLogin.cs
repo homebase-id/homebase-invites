@@ -12,7 +12,7 @@ namespace Odin.InvitationCodes.Hosting;
 
 /// <summary>
 /// A plan an owner can buy on the upgrade page. Only <c>Id</c> is needed (a plan Id on the identity hosts); the
-/// name shown defaults to it. <c>Price</c> is only shown: there is no payment yet.
+/// name shown defaults to it. <c>Price</c> is accepted but not shown: there is no payment yet.
 /// </summary>
 public record PlanForSale
 {
