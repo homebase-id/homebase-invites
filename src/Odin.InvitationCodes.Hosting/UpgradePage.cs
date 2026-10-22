@@ -58,13 +58,20 @@ public class UpgradeSession(IDataProtectionProvider dataProtection)
 
 /// <summary>
 /// The page where an owner gets a bigger plan (README, "Upgrade page"). The owner console sends them to
-/// <c>/upgrade?id=&lt;identity&gt;&amp;host=&lt;provisioning domain&gt;</c>; they sign in with YouAuth, see their
-/// plan and the plans for sale, and buy one. Buying is a stand-in for payment: it makes a purchase grant, which
-/// sets the plan on the identity's host.
+/// <c>/upgrade?id=&lt;identity&gt;&amp;host=&lt;provisioning domain&gt;</c>; they sign in with YouAuth, then go
+/// through four steps: choose a plan, confirm it, a test checkout, and done. The checkout is a stand-in for
+/// payment: completing it makes a purchase grant, which sets the plan on the identity's host.
 /// </summary>
 public static class UpgradePage
 {
     public const string Root = "/upgrade";
+
+    private static readonly string[] Steps = ["Choose", "Confirm", "Checkout", "Done"];
+
+    /// <summary>
+    /// Where "Back to your Homebase" goes once the plan is changed. The one place to change it.
+    /// </summary>
+    public static string ReturnUrl(string identity) => $"https://{identity}/owner/settings/plan";
 
     public static void Map(WebApplication app)
     {
@@ -75,8 +82,8 @@ public static class UpgradePage
 
         var page = app.MapGroup(Root);
 
-        // id and host are hints anyone can write into a link: id only says whom to sign in, host is used only if it
-        // is a host this service knows
+        // Step 1, choose. id and host are hints anyone can write into a link: id only says whom to sign in, host is
+        // used only if it is a host this service knows
         page.MapGet("", async (HttpContext context, string? id, string? host, UpgradeOptions options,
             UpgradeSession session, YouAuthLogin login, PlanService plans, PlanHosts hosts, IAntiforgery antiforgery) =>
         {
@@ -101,8 +108,8 @@ public static class UpgradePage
             var signedIn = session.Read(context);
             if (signedIn != null && (requested == null || requested == signedIn.Identity))
             {
-                return await SignedInPageAsync(context, signedIn with { Host = signedIn.Host ?? hint }, options, session,
-                    plans, antiforgery);
+                var located = await LocateAsync(context, signedIn with { Host = signedIn.Host ?? hint }, session, plans);
+                return located.Error ?? ChoosePage(context, located.SignedIn!, located.PlanId, options, antiforgery);
             }
 
             if (requested == null)
@@ -135,8 +142,8 @@ public static class UpgradePage
             return Results.Redirect(Root);
         });
 
-        // A stand-in for payment: buying makes a purchase grant, which sets the plan on the identity's host
-        page.MapPost("/buy", async (HttpContext context, [FromForm] string? planId, UpgradeOptions options,
+        // Step 2, confirm
+        page.MapGet("/confirm", async (HttpContext context, string? plan, UpgradeOptions options,
             UpgradeSession session, PlanService plans) =>
         {
             if (!options.Enabled)
@@ -147,14 +154,107 @@ public static class UpgradePage
             var signedIn = session.Read(context);
             if (signedIn == null)
             {
-                return Page(StatusCodes.Status401Unauthorized, "Not signed in",
-                    P("Your session has ended. Open this page again from your Homebase owner console."));
+                return SessionEnded();
+            }
+
+            var chosen = options.ForSale(plan);
+            if (chosen == null)
+            {
+                return NotForSale();
+            }
+
+            var located = await LocateAsync(context, signedIn, session, plans);
+            if (located.Error != null)
+            {
+                return located.Error;
+            }
+
+            var current = PlanName(options, located.PlanId);
+            var html = new StringBuilder();
+            html.Append(StepsBar(1));
+            html.Append($"""
+                         <div class="card">
+                         <p class="muted">Change your plan from <strong>{Encode(current)}</strong> to</p>
+                         <h2>{Encode(chosen.Name)}</h2>
+                         {Description(chosen)}
+                         </div>
+                         <div class="actions">
+                         <a class="button" href="{Root}/checkout?plan={Uri.EscapeDataString(chosen.Id)}">Continue to checkout</a>
+                         <a class="button secondary" href="{Root}">Back</a>
+                         </div>
+                         """);
+            return Page(StatusCodes.Status200OK, "Confirm your new plan", html.ToString());
+        });
+
+        // Step 3, a test checkout: the card fields have no names, so the browser never sends them anywhere
+        page.MapGet("/checkout", (HttpContext context, string? plan, UpgradeOptions options, UpgradeSession session,
+            IAntiforgery antiforgery) =>
+        {
+            if (!options.Enabled)
+            {
+                return Results.NotFound();
+            }
+
+            var signedIn = session.Read(context);
+            if (signedIn == null)
+            {
+                return SessionEnded();
+            }
+
+            var chosen = options.ForSale(plan);
+            if (chosen == null)
+            {
+                return NotForSale();
+            }
+
+            var html = new StringBuilder();
+            html.Append(StepsBar(2));
+            html.Append("""<p class="banner" role="note"><strong>Test checkout</strong> — no payment is taken.</p>""");
+            html.Append($"""
+                         <div class="card">
+                         <p class="muted">Order summary</p>
+                         <h2>{Encode(chosen.Name)}</h2>
+                         {Description(chosen)}
+                         <p class="muted">For {Encode(signedIn.Identity)}</p>
+                         </div>
+                         <form method="post" action="{Root}/checkout" class="card checkout">
+                         {AntiforgeryField(context, antiforgery)}
+                         <input type="hidden" name="planId" value="{Encode(chosen.Id)}">
+                         <label>Name on card <input autocomplete="off" placeholder="Frodo Baggins"></label>
+                         <label>Card number <input autocomplete="off" inputmode="numeric" placeholder="4242 4242 4242 4242"></label>
+                         <div class="row">
+                         <label>Expiry <input autocomplete="off" placeholder="MM / YY"></label>
+                         <label>CVC <input autocomplete="off" inputmode="numeric" placeholder="123"></label>
+                         </div>
+                         <div class="actions">
+                         <button type="submit">Complete purchase</button>
+                         <a class="button secondary" href="{Root}/confirm?plan={Uri.EscapeDataString(chosen.Id)}">Back</a>
+                         </div>
+                         </form>
+                         """);
+            return Page(StatusCodes.Status200OK, "Checkout", html.ToString());
+        });
+
+        // Completing the test checkout makes a purchase grant, which sets the plan on the identity's host. Only
+        // planId is read; anything else in the form is ignored
+        page.MapPost("/checkout", async (HttpContext context, [FromForm] string? planId, UpgradeOptions options,
+            UpgradeSession session, PlanService plans) =>
+        {
+            if (!options.Enabled)
+            {
+                return Results.NotFound();
+            }
+
+            var signedIn = session.Read(context);
+            if (signedIn == null)
+            {
+                return SessionEnded();
             }
 
             var plan = options.ForSale(planId);
             if (plan == null)
             {
-                return Page(StatusCodes.Status400BadRequest, "Not for sale", P("That plan is not for sale."));
+                return NotForSale();
             }
 
             var grant = await plans.GrantAsync(signedIn.Identity, plan.Id, PlanGrantSource.Purchase,
@@ -164,16 +264,48 @@ public static class UpgradePage
                 session.Write(context, signedIn with { Host = grant.Host });
             }
 
-            var body = grant.Status switch
+            return Results.Redirect($"{Root}/done?grant={grant.Id}");
+        });
+
+        // Step 4, done: only the signed-in identity's own purchases
+        page.MapGet("/done", async (HttpContext context, long? grant, UpgradeOptions options, UpgradeSession session,
+            PlanGrantStore grants) =>
+        {
+            if (!options.Enabled)
             {
-                PlanGrantStatus.Applied => P($"{signedIn.Identity} is now on {plan.Name}."),
-                PlanGrantStatus.Pending => P($"Your purchase of {plan.Name} is recorded. We could not apply it to " +
-                                             $"{signedIn.Identity} yet, and will keep trying; it usually takes a few minutes."),
-                _ => P($"We could not apply {plan.Name} to {signedIn.Identity}: your host does not offer it. " +
-                       $"Please contact us with reference {grant.Reference}."),
-            };
-            return Page(StatusCodes.Status200OK, grant.Status == PlanGrantStatus.Applied ? "Done" : "Thank you",
-                body + $"""<p><a href="{Root}">Back to your plan</a></p>""");
+                return Results.NotFound();
+            }
+
+            var signedIn = session.Read(context);
+            if (signedIn == null)
+            {
+                return SessionEnded();
+            }
+
+            var purchase = grant == null ? null : await grants.GetAsync(grant.Value);
+            if (purchase == null || purchase.Identity != signedIn.Identity)
+            {
+                return Page(StatusCodes.Status404NotFound, "Not found", P("We could not find that purchase."));
+            }
+
+            var plan = options.ForSale(purchase.PlanId);
+            var name = plan?.Name ?? purchase.PlanId;
+            var html = new StringBuilder();
+            html.Append(StepsBar(3));
+            html.Append("<div class=\"card\">");
+            html.Append(purchase.Status switch
+            {
+                PlanGrantStatus.Applied => $"<h2>You're on {Encode(name)}</h2>" + (plan == null ? "" : Description(plan)),
+                PlanGrantStatus.Pending => $"<h2>Thank you</h2>" +
+                                           P($"Your purchase of {name} is recorded; your plan will change shortly."),
+                _ => "<h2>Something went wrong</h2>" +
+                     P($"We could not change {signedIn.Identity} to {name}. Please contact us with reference " +
+                       $"{purchase.Reference}."),
+            });
+            html.Append("</div>");
+            html.Append($"""<div class="actions"><a class="button" href="{Encode(ReturnUrl(signedIn.Identity))}">Back to your Homebase</a></div>""");
+            return Page(StatusCodes.Status200OK, purchase.Status == PlanGrantStatus.Applied ? "Done" : "Thank you",
+                html.ToString());
         });
 
         // The form is read only so the antiforgery token is checked
@@ -192,28 +324,40 @@ public static class UpgradePage
 
     //
 
-    private static async Task<IResult> SignedInPageAsync(HttpContext context, UpgradeSession.Data signedIn,
-        UpgradeOptions options, UpgradeSession session, PlanService plans, IAntiforgery antiforgery)
+    private record Located(UpgradeSession.Data? SignedIn, string? PlanId, IResult? Error);
+
+    // Where the identity is and its plan, asked of its host; remembers the host in the session when it moved
+    private static async Task<Located> LocateAsync(HttpContext context, UpgradeSession.Data signedIn,
+        UpgradeSession session, PlanService plans)
     {
         var located = await plans.LocateAsync(signedIn.Identity, signedIn.Host);
         if (located.Host == null)
         {
-            return Page(StatusCodes.Status404NotFound, "Not found",
-                P($"We could not find {signedIn.Identity} on our hosts just now. Please try again in a few minutes."));
+            return new Located(null, null, Page(StatusCodes.Status404NotFound, "Not found",
+                P($"We could not find {signedIn.Identity} on our hosts just now. Please try again in a few minutes.")));
         }
+
         if (located.Host != signedIn.Host)
         {
-            session.Write(context, signedIn with { Host = located.Host });
+            signedIn = signedIn with { Host = located.Host };
+            session.Write(context, signedIn);
         }
 
-        var tokens = antiforgery.GetAndStoreTokens(context);
-        var antiforgeryField =
-            $"""<input type="hidden" name="{Encode(tokens.FormFieldName)}" value="{Encode(tokens.RequestToken!)}">""";
+        return new Located(signedIn, located.PlanId, null);
+    }
 
-        var current = located.PlanId == null ? null : options.ForSale(located.PlanId);
+    private static IResult ChoosePage(HttpContext context, UpgradeSession.Data signedIn, string? planId,
+        UpgradeOptions options, IAntiforgery antiforgery)
+    {
         var html = new StringBuilder();
-        html.Append(P($"Signed in as {signedIn.Identity}."));
-        html.Append($"""<p>Your plan: <strong>{Encode(current?.Name ?? located.PlanId ?? "none")}</strong></p>""");
+        html.Append(StepsBar(0));
+        html.Append($"""<p class="muted">Signed in as <strong>{Encode(signedIn.Identity)}</strong></p>""");
+
+        var currentForSale = options.PlansForSale.Any(p => SamePlan(p.Id, planId));
+        if (!currentForSale)
+        {
+            html.Append($"""<p>Your plan: <strong>{Encode(planId ?? "none")}</strong></p>""");
+        }
 
         if (options.PlansForSale.Count == 0)
         {
@@ -221,35 +365,61 @@ public static class UpgradePage
         }
         else
         {
-            html.Append("<h2>Plans</h2><ul class=\"plans\">");
+            html.Append("<ul class=\"plans\">");
             foreach (var plan in options.PlansForSale)
             {
-                var isCurrent = string.Equals(plan.Id, located.PlanId, StringComparison.OrdinalIgnoreCase);
-                html.Append("<li>");
-                html.Append($"<h3>{Encode(plan.Name)}</h3>");
-                if (plan.Description != "")
+                var isCurrent = SamePlan(plan.Id, planId);
+                html.Append(isCurrent ? "<li class=\"card current\">" : "<li class=\"card\">");
+                if (isCurrent)
                 {
-                    html.Append(P(plan.Description));
+                    html.Append("<p class=\"badge\">Your plan</p>");
                 }
-                if (plan.Price != "")
+                html.Append($"<h2>{Encode(plan.Name)}</h2>");
+                html.Append(Description(plan));
+                if (!isCurrent)
                 {
-                    html.Append($"""<p class="price">{Encode(plan.Price)}</p>""");
+                    html.Append($"""<a class="button" href="{Root}/confirm?plan={Uri.EscapeDataString(plan.Id)}">Choose {Encode(plan.Name)}</a>""");
                 }
-                html.Append(isCurrent
-                    ? "<p><em>Your current plan</em></p>"
-                    : $"""
-                       <form method="post" action="{Root}/buy">{antiforgeryField}
-                       <input type="hidden" name="planId" value="{Encode(plan.Id)}">
-                       <button type="submit">Buy {Encode(plan.Name)}</button></form>
-                       """);
                 html.Append("</li>");
             }
             html.Append("</ul>");
         }
 
-        html.Append($"""<form method="post" action="{Root}/sign-out">{antiforgeryField}<button type="submit" class="secondary">Sign out</button></form>""");
-        return Page(StatusCodes.Status200OK, "Get more space", html.ToString());
+        html.Append($"""<form method="post" action="{Root}/sign-out">{AntiforgeryField(context, antiforgery)}<button type="submit" class="secondary">Sign out</button></form>""");
+        return Page(StatusCodes.Status200OK, "Choose a plan", html.ToString());
     }
+
+    private static bool SamePlan(string a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    private static string PlanName(UpgradeOptions options, string? planId) =>
+        options.ForSale(planId)?.Name ?? planId ?? "none";
+
+    private static string Description(PlanForSale plan) => plan.Description == "" ? "" : P(plan.Description);
+
+    private static string AntiforgeryField(HttpContext context, IAntiforgery antiforgery)
+    {
+        var tokens = antiforgery.GetAndStoreTokens(context);
+        return $"""<input type="hidden" name="{Encode(tokens.FormFieldName)}" value="{Encode(tokens.RequestToken!)}">""";
+    }
+
+    private static string StepsBar(int current)
+    {
+        var html = new StringBuilder("<ol class=\"steps\" aria-label=\"Steps\">");
+        for (var i = 0; i < Steps.Length; i++)
+        {
+            html.Append(i == current
+                ? $"<li aria-current=\"step\">{Steps[i]}</li>"
+                : i < current ? $"<li class=\"done\">{Steps[i]}</li>" : $"<li>{Steps[i]}</li>");
+        }
+        return html.Append("</ol>").ToString();
+    }
+
+    private static IResult SessionEnded() => Page(StatusCodes.Status401Unauthorized, "Not signed in",
+        P("Your session has ended. Open this page again from your Homebase owner console."));
+
+    private static IResult NotForSale() =>
+        Page(StatusCodes.Status400BadRequest, "Not for sale", P("That plan is not for sale.") +
+                                                              $"""<p><a href="{Root}">Choose another plan</a></p>""");
 
     private static string Encode(string text) => HtmlEncoder.Default.Encode(text);
 
@@ -264,15 +434,32 @@ public static class UpgradePage
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <title>{{Encode(title)}}</title>
           <style>
-          body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #1e293b; line-height: 1.5; }
-          h1 { font-size: 1.5rem; } h2 { font-size: 1.2rem; margin-top: 2rem; } h3 { margin: 0 0 .25rem; font-size: 1.05rem; }
-          ul.plans { list-style: none; padding: 0; }
-          ul.plans li { border: 1px solid #cbd5e1; border-radius: .5rem; padding: 1rem; margin-bottom: 1rem; }
-          .price { font-weight: 600; }
-          button { font: inherit; padding: .5rem 1rem; border-radius: .375rem; border: 0; background: #4f46e5; color: #fff; cursor: pointer; }
-          button:focus-visible, a:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 2px; }
-          button.secondary { background: #e2e8f0; color: #1e293b; margin-top: 1rem; }
-          a { color: #4f46e5; }
+          :root { --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --brand: #4f46e5; --brand-ink: #fff; --soft: #eef2ff; }
+          * { box-sizing: border-box; }
+          body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; color: var(--ink); line-height: 1.5; }
+          main { max-width: 56rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+          h1 { font-size: 1.75rem; margin: 0 0 1rem; } h2 { font-size: 1.2rem; margin: 0 0 .25rem; }
+          p { margin: .25rem 0 .75rem; }
+          .muted { color: var(--muted); }
+          .steps { display: flex; flex-wrap: wrap; gap: .5rem; list-style: none; padding: 0; margin: 0 0 1.5rem; font-size: .9rem; color: var(--muted); }
+          .steps li::after { content: "·"; margin-left: .5rem; } .steps li:last-child::after { content: ""; }
+          .steps li[aria-current] { color: var(--brand); font-weight: 600; } .steps li.done { color: var(--ink); }
+          .card { background: #fff; border: 1px solid var(--line); border-radius: .75rem; padding: 1.25rem; box-shadow: 0 1px 2px rgba(15,23,42,.05); margin-bottom: 1rem; }
+          ul.plans { list-style: none; padding: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
+          ul.plans .card { display: flex; flex-direction: column; margin: 0; }
+          ul.plans .card .button { margin-top: auto; align-self: flex-start; }
+          .card.current { border: 2px solid var(--brand); background: var(--soft); }
+          .badge { display: inline-block; font-size: .8rem; font-weight: 600; color: var(--brand); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 .5rem; }
+          .banner { background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; border-radius: .5rem; padding: .75rem 1rem; }
+          .checkout label { display: block; font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }
+          .checkout input { display: block; width: 100%; font: inherit; color: var(--ink); padding: .6rem .75rem; margin-top: .25rem; border: 1px solid #cbd5e1; border-radius: .5rem; }
+          .checkout .row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+          .actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-top: 1rem; }
+          button, .button { display: inline-block; font: inherit; font-weight: 600; text-decoration: none; padding: .6rem 1.1rem; border-radius: .5rem; border: 0; background: var(--brand); color: var(--brand-ink); cursor: pointer; }
+          button.secondary, .button.secondary { background: var(--line); color: var(--ink); }
+          form > button.secondary { margin-top: 1.5rem; }
+          button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 2px; }
+          a { color: var(--brand); }
           </style>
           </head>
           <body>

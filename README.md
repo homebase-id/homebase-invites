@@ -130,10 +130,23 @@ Where an owner gets a bigger plan. Their owner console sends them to
    trades its digest at `https://<identity>/api/owner/v1/youauth/token`, and opens the token (AES-GCM; an
    identity answering `aes-cbc` is refused as a downgrade). A token that opens is the proof the owner of that
    identity is here. The session is a data-protected cookie on `/upgrade`, for an hour.
-3. **The page** shows the identity's plan (asked of its host, as grants find it) and the plans for sale, each
-   with a **Buy** button.
-4. **Buy is a stand-in for payment**: it makes a `purchase` grant for the plan (see Plan grants), which sets it on
-   the identity's host straight away or keeps trying. A plan not in `PlanService__PlansForSale` cannot be bought.
+3. **Choose** (`/upgrade`): the plans for sale as cards (name and description; no prices). The identity's plan,
+   asked of its host as grants find it, is marked "Your plan"; when it is not one for sale it is named above the
+   cards.
+4. **Confirm** (`/upgrade/confirm?plan=<id>`): "Change your plan from A to B", then **Continue to checkout**.
+5. **Test checkout** (`/upgrade/checkout?plan=<id>`): an order summary and a card form under a banner saying
+   **no payment is taken**. The card fields have no names, so the browser never sends them; the server reads only
+   `planId` and ignores anything else. **Complete purchase** posts it.
+6. **The stand-in for payment** (`POST /upgrade/checkout`): it makes a `purchase` grant for the plan (see Plan
+   grants), which sets it on the identity's host straight away or keeps trying, and redirects to done.
+7. **Done** (`/upgrade/done?grant=<id>`, only for the signed-in identity's own purchases): "You're on B", or
+   that the change is on its way, or that it failed; then **Back to your Homebase**.
+
+A plan not in `PlanService__PlansForSale` cannot be confirmed, checked out or bought (400). Its `Price` is
+accepted in configuration but not shown.
+
+**Back to your Homebase** goes to `https://<identity>/owner/settings/plan` (`UpgradePage.ReturnUrl`, the one
+place to change it).
 
 `/.well-known/youauth-client.json` names the service (`PlanService__DisplayName`) and its callback, so the
 identity's consent screen shows the name and accepts no other callback.
@@ -179,7 +192,7 @@ never to self-hosted servers.
 
 - Grants are kept in this service: it now holds which identities were given which plans, and why.
 - The plan key lets its holder set any identity's plan on every host; it cannot do anything else there.
-- The upgrade page takes no payment: Buy grants the plan. It must not be turned on for real owners until payment
+- The upgrade page takes no payment: completing the test checkout grants the plan. It must not be turned on for real owners until payment
   replaces the stand-in.
 
 - Requests are limited per client IP. Only odin-core can limit the people behind its public signup page, so
