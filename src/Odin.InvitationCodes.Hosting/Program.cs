@@ -50,10 +50,11 @@ builder.Services.AddAntiforgery(options =>
 // Every real request is well under 1 KB
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.Limits.MaxRequestBodySize = InvitationCodeApi.MaxRequestBodySize);
 
-// Caddy, on a private address, says who the client is; nobody else is believed
+// Caddy, on a private address, says who the client is and that it came over https (it ends TLS and
+// proxies plain http); nobody else is believed. The upgrade page's secure cookies need the https.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     foreach (var network in new[] { "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7" })
     {
         options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
