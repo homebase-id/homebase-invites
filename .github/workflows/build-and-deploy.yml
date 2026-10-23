@@ -16,12 +16,13 @@ on:
 # Copied from homebase-social-sync's build-and-deploy.yml, which is the reviewed shape for a service
 # outside odin-core: build and push to ghcr, then ask the ansible controller to deploy with the
 # constrained CONTROLLER_DEPLOY_KEY. The controller routes only what odin-deploy.sh and run-playbook.sh
-# in the DevOps repo allowlist, so the deploy job fails until homebase-invites is added there.
+# in the DevOps repo allowlist, so the deploy job fails until raven-hosting is added there (it was
+# homebase-invites before the rename).
 #
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "${{ github.repository }}-internal"
+  IMAGE_NAME: "homebase-id/raven-hosting-internal"
 
 jobs:
   build:
@@ -82,8 +83,8 @@ jobs:
           set -euo pipefail
           export LC_ALL=C
           image="$(printf '%s' "$FULL_IMAGE" | tr '[:upper:]' '[:lower:]')"
-          if [[ "$image" != "ghcr.io/homebase-id/homebase-invites-internal" ]]; then
-            echo "Refusing: the controller allowlists homebase-invites-internal,"
+          if [[ "$image" != "ghcr.io/homebase-id/raven-hosting-internal" ]]; then
+            echo "Refusing: the controller allowlists raven-hosting-internal,"
             echo "but this workflow would build and deploy '${image}'."
             exit 1
           fi
@@ -105,7 +106,7 @@ jobs:
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=homebase-invites
+          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=raven-hosting
 
   deploy:
     needs: build
@@ -139,4 +140,4 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=10 \
             "$ANSIBLE_CONTROLLER" \
-            "deploy homebase-invites aux homebase-invites-internal ${TAG} start_container=${START_CONTAINER}"
+            "deploy raven-hosting aux raven-hosting-internal ${TAG} start_container=${START_CONTAINER}"

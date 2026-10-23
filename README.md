@@ -1,17 +1,18 @@
-# homebase-invites
+# raven-hosting
 
 Raven Hosting's service for Homebase identities: invitation codes for signups, the hosting plans, plan grants,
-and the upgrade page where owners get a bigger plan.
+and the upgrade page where owners get a bigger plan. It was homebase-invites before the rename: see
+[Renamed](#renamed) for what changed and what still works under the old names.
 
 The identity hosts (odin-core) call it at signup to check a code and take a use; who signed up with a code
 is kept on the new identity's registration, not here. The hosts have no plans of their own (odin-core #1994):
 this service holds them, and sends what a plan gives whenever it gives one. Admins manage codes and plans with
-`invites.sh` or curl.
+`raven.sh` or curl.
 
 ## Run it
 
 ```bash
-dotnet run --project src/Odin.InvitationCodes.Hosting     # http://localhost:5246, Development config
+dotnet run --project src/Raven.Hosting     # http://localhost:5246, Development config
 dotnet test
 
 ./build-docker-image.sh && ./run-attached.sh              # the image, on 127.0.0.1:5246, database in ./data
@@ -19,23 +20,24 @@ dotnet test
 
 ## Command line
 
-`./invites.sh` wraps the API. `./invites.sh setup` saves both keys to `~/.homebase-invites` (outside the
+`./raven.sh` wraps the API. `./raven.sh setup` saves both keys to `~/.raven-hosting` (outside the
 repo, readable only by you); then for plans `plans` (a table; `--json` for the service's answer), `plan-create`,
-`plan-edit`, `plan-delete`; for codes `./invites.sh create --uses 5 --source "spring campaign" --plan registered --owner frodo.demo.rocks`,
-`list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`; and for grants `grant --id frodo.demo.rocks --plan veterans`, `grants`, `retry`. `./invites.sh help` explains each command and its arguments.
+`plan-edit`, `plan-delete`; for codes `./raven.sh create --uses 5 --source "spring campaign" --plan registered --owner frodo.demo.rocks`,
+`list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`; and for grants `grant --id frodo.demo.rocks --plan veterans`, `grants`, `retry`. `./raven.sh help` explains each command and its arguments.
 
 ## Tests
 
-`dotnet test` runs the store tests, every API endpoint over HTTP in process, and `invites.sh` with bash against
+`dotnet test` runs the store tests, every API endpoint over HTTP in process, and `raven.sh` with bash against
 the service on a real port. The script tests need `jq`: without it they are skipped locally and fail under CI.
 `.github/workflows/test.yml` builds and runs them on every pull request and push to main.
 
 ## Deploy
 
 `.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
-`ghcr.io/homebase-id/homebase-invites-internal:<branch>`, then asks the ansible controller to deploy it to
-blackbird-aux, behind Caddy at https://invites.ravenhosting.cloud, the same way homebase-social-sync deploys. The controller only deploys what the DevOps repo
-allowlists, so that has to be set up first.
+`ghcr.io/homebase-id/raven-hosting-internal:<branch>`, then asks the ansible controller to deploy it
+(`deploy raven-hosting aux raven-hosting-internal <tag>`) to blackbird-aux, behind Caddy at
+https://invites.ravenhosting.cloud, the same way homebase-social-sync deploys. The controller only deploys what the
+DevOps repo allowlists (`odin-deploy.sh`, `run-playbook.sh`), so that has to be set up first.
 
 The container listens on 8080 and keeps its database in `/data`: mount a volume there.
 
@@ -122,29 +124,29 @@ plan. The starting set, today's plans:
 | `tiny-test` | 1048576 (1 MB) | no | no |
 
 ```bash
-./invites.sh plan-create --id free --name Free --quota-bytes 64424509440 --public-web-presence true
-./invites.sh plan-create --id free-5gb --name "Free 5 GB" --quota-bytes 5368709120 --public-web-presence false
-./invites.sh plan-create --id registered --name Registered --quota-bytes 10737418240 --public-web-presence true --for-sale true --sort-order 1
-./invites.sh plan-create --id veterans --name Veterans --quota-bytes 1099511627776 --public-web-presence true --for-sale true --sort-order 2
-./invites.sh plan-create --id tiny-test --name "Tiny test" --quota-bytes 1048576 --public-web-presence false
-./invites.sh plans
-./invites.sh stats      # every plan under "by plan" should be one of the plans above
+./raven.sh plan-create --id free --name Free --quota-bytes 64424509440 --public-web-presence true
+./raven.sh plan-create --id free-5gb --name "Free 5 GB" --quota-bytes 5368709120 --public-web-presence false
+./raven.sh plan-create --id registered --name Registered --quota-bytes 10737418240 --public-web-presence true --for-sale true --sort-order 1
+./raven.sh plan-create --id veterans --name Veterans --quota-bytes 1099511627776 --public-web-presence true --for-sale true --sort-order 2
+./raven.sh plan-create --id tiny-test --name "Tiny test" --quota-bytes 1048576 --public-web-presence false
+./raven.sh plans
+./raven.sh stats      # every plan under "by plan" should be one of the plans above
 ```
 
 A code whose plan is not one of the plans still works, with the host's defaults; give it a plan with
-`./invites.sh edit <code> --plan <plan id>`.
+`./raven.sh edit <code> --plan <plan id>`.
 
 ## Plan grants
 
 The service also gives identities plans: a **grant** says identity X is owed plan P, and the service sets it on
 the identity host that serves X, with what P gives: its quota and public web presence, as they were when the grant
-was made. P must be one of the [plans](#plans) (400 otherwise). Admins make grants now (`./invites.sh grant`); the
+was made. P must be one of the [plans](#plans) (400 otherwise). Admins make grants now (`./raven.sh grant`); the
 upgrade page makes `purchase` grants. A plan is set only through a grant, never by a link.
 
 ### Finding the host
 
-The service knows the identity hosts by their provisioning domains (`PlanService__Hosts`), and calls only those,
-with the one plan key they all take (`PlanService__ApiKey`; odin-core's `Registry__AccountService__ApiKey`). To find
+The service knows the identity hosts by their provisioning domains (`RavenHosting__IdentityHosts`), and calls only those,
+with the one plan key they all take (`RavenHosting__AccountServiceApiKey`; odin-core's `Registry__AccountService__ApiKey`). To find
 the host that serves X it asks, in order: the host the request named (`host`, only if it is a known one; owner
 consoles send it as `?host=` in the upgrade link), the host that last had X, then every other known host. The
 first to answer `200` has it; `404` means not there. The host API (odin-core, on the provisioning domain):
@@ -165,8 +167,8 @@ alone: the host keeps the identity's own.
 | `applied` | the host has it; `host` says which, `appliedAt` when |
 | `failed` | the host refused the plan (`400`: an empty plan Id or a quota that is not more than 0, which this service never sends). Not retried by itself; once the cause is fixed, `retry` |
 
-A background task tries due grants every minute (`PlanService__RetryIntervalSeconds`) and, once a day
-(`PlanService__ReconcileIntervalHours`), reconciles: for each identity it asks the host for the plan Id, quota and
+A background task tries due grants every minute (`RavenHosting__GrantRetryIntervalSeconds`) and, once a day
+(`RavenHosting__ReconcileIntervalHours`), reconciles: for each identity it asks the host for the plan Id, quota and
 public web presence it has, and if any differs from its latest applied grant, sets the grant again. Only what both
 sides have is compared: a grant from before plans were kept here by its plan Id alone, and a host from before
 odin-core #1994, which does not say its quota or public web presence, not on those. So a plan changed by hand on
@@ -190,8 +192,8 @@ curl -X POST https://<service>/api/v1/plans/grants/ \
 ## Upgrade page
 
 Where an owner gets a bigger plan. Their owner console sends them to
-`https://<PlanService__PublicDomain>/upgrade?id=<identity>&host=<provisioning domain>` (set odin-core's
-`Registry__UpgradeUrl` to `https://<PlanService__PublicDomain>/upgrade`; the host adds `id` and `host`).
+`https://<RavenHosting__PublicDomain>/upgrade?id=<identity>&host=<provisioning domain>` (set odin-core's
+`Registry__UpgradeUrl` to `https://<RavenHosting__PublicDomain>/upgrade`; the host adds `id` and `host`).
 
 1. **Sign in with YouAuth**, as a domain client, done on this server (odin-core
    `docs/youauth-unified-authorization.md`). The service makes a P-384 key pair and a single-use state that
@@ -223,7 +225,7 @@ once it is no longer for sale.
 **Back to your Homebase** goes to `https://<identity>/owner/settings/plan` (`UpgradePage.ReturnUrl`, the one
 place to change it).
 
-`/.well-known/youauth-client.json` names the service (`PlanService__DisplayName`) and its callback, so the
+`/.well-known/youauth-client.json` names the service (`RavenHosting__DisplayName`) and its callback, so the
 identity's consent screen shows the name and accepts no other callback.
 
 Security:
@@ -240,16 +242,18 @@ Security:
 
 | Key | Value |
 |---|---|
-| `InvitationCodes__DatabasePath` | required; e.g. `/data/invitation-codes.db`, on a persistent volume |
-| `InvitationCodes__SignupApiKey` | required; the signup key, for the identity hosts |
-| `InvitationCodes__CreateApiKey` | required; the create key, for admins |
-| `InvitationCodes__RequestsPerMinutePerIp` | optional, default 300; more than that from one client is a 429 |
-| `PlanService__Hosts__0`, `__1`, ... | optional; the identity hosts' provisioning domains, e.g. `provisioning.demo.dominion.id`. None: grants stay pending |
-| `PlanService__ApiKey` | required with hosts; the plan key, the same on every host (odin-core `Registry__AccountService__ApiKey`). Give it only to Homebase-run hosts |
-| `PlanService__RetryIntervalSeconds` | optional, default 60; how often due grants are tried |
-| `PlanService__ReconcileIntervalHours` | optional, default 24 |
-| `PlanService__PublicDomain` | optional; the service's own public domain, e.g. `invites.ravenhosting.cloud`: its YouAuth client id and where `/upgrade` is. None: the upgrade page is off (404) |
-| `PlanService__DisplayName` | optional; what the identity's consent screen calls the service. Defaults to the public domain |
+| `RavenHosting__DatabasePath` | required; e.g. `/data/invitation-codes.db`, on a persistent volume |
+| `RavenHosting__SignupApiKey` | required; the signup key, for the identity hosts |
+| `RavenHosting__CreateApiKey` | required; the create key, for admins |
+| `RavenHosting__RequestsPerMinutePerIp` | optional, default 300; more than that from one client is a 429 |
+| `RavenHosting__IdentityHosts__0`, `__1`, ... | optional; the identity hosts' provisioning domains, e.g. `provisioning.demo.dominion.id`. None: grants stay pending |
+| `RavenHosting__AccountServiceApiKey` | required with hosts; the plan key, the same on every host (odin-core `Registry__AccountService__ApiKey`). Give it only to Homebase-run hosts |
+| `RavenHosting__GrantRetryIntervalSeconds` | optional, default 60; how often due grants are tried |
+| `RavenHosting__ReconcileIntervalHours` | optional, default 24 |
+| `RavenHosting__PublicDomain` | optional; the service's own public domain, e.g. `invites.ravenhosting.cloud`: its YouAuth client id and where `/upgrade` is. None: the upgrade page is off (404) |
+| `RavenHosting__DisplayName` | optional; what the identity's consent screen calls the service. Defaults to the public domain |
+
+Each key also works under its name from before the rename (see [Renamed](#renamed)).
 
 SQLite means **one instance**, and the database file should be backed up.
 
@@ -261,6 +265,46 @@ by a firewall or a CDN.
 Keys are 32 random bytes, base64url: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`. Give the
 signup key to Homebase-run identity hosts only (`Registry__InvitationCodeService__ApiKey` in odin-core),
 never to self-hosted servers.
+
+## Renamed
+
+This was homebase-invites. The rename changed:
+
+| Before | Now |
+|---|---|
+| repo `homebase-id/homebase-invites` | `homebase-id/raven-hosting` (GitHub redirects the old URLs) |
+| image `ghcr.io/homebase-id/homebase-invites-internal` | `ghcr.io/homebase-id/raven-hosting-internal` |
+| controller route `deploy homebase-invites aux homebase-invites-internal` | `deploy raven-hosting aux raven-hosting-internal` |
+| projects `Odin.InvitationCodes.Hosting`, `.Tests` | `Raven.Hosting`, `Raven.Hosting.Tests` |
+| `invites.sh`, `~/.homebase-invites`, `HOMEBASE_INVITES_*` | `raven.sh`, `~/.raven-hosting`, `RAVEN_HOSTING_*` |
+| the upgrade page's cookies `homebase_upgrade`, `homebase_upgrade_antiforgery` | `raven_upgrade`, `raven_upgrade_antiforgery` (owners signed in at the deploy sign in again) |
+
+The settings, under their old names (still read):
+
+| Now | Before |
+|---|---|
+| `RavenHosting__DatabasePath` | `InvitationCodes__DatabasePath` |
+| `RavenHosting__SignupApiKey` | `InvitationCodes__SignupApiKey` |
+| `RavenHosting__CreateApiKey` | `InvitationCodes__CreateApiKey` |
+| `RavenHosting__RequestsPerMinutePerIp` | `InvitationCodes__RequestsPerMinutePerIp` |
+| `RavenHosting__IdentityHosts__<n>` | `PlanService__Hosts__<n>` |
+| `RavenHosting__AccountServiceApiKey` | `PlanService__ApiKey` |
+| `RavenHosting__GrantRetryIntervalSeconds` | `PlanService__RetryIntervalSeconds` |
+| `RavenHosting__ReconcileIntervalHours` | `PlanService__ReconcileIntervalHours` |
+| `RavenHosting__PublicDomain` | `PlanService__PublicDomain` |
+| `RavenHosting__DisplayName` | `PlanService__DisplayName` |
+
+A setting left out under its new name takes its old one's value, and the service logs a warning naming the old
+ones it used. Set under both names with different values, the service refuses to start, rather than guess. The
+image sets `RavenHosting__DatabasePath=/data/invitation-codes.db`, the file it has always used, so a deploy that
+still sets `InvitationCodes__DatabasePath` to that path keeps its data.
+
+`raven.sh` reads `~/.raven-hosting`, or `~/.homebase-invites` when there is none, and the `HOMEBASE_INVITES_*`
+variables when the `RAVEN_HOSTING_*` ones are not set.
+
+Unchanged: the database (file, tables and data), the API paths, the data-protection application name
+(`homebase-invites`, which the keys in the database were made under), and the public domain
+`invites.ravenhosting.cloud`.
 
 ## Known gaps
 
