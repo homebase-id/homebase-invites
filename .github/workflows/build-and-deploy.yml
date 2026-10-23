@@ -16,8 +16,7 @@ on:
 # Copied from homebase-social-sync's build-and-deploy.yml, which is the reviewed shape for a service
 # outside odin-core: build and push to ghcr, then ask the ansible controller to deploy with the
 # constrained CONTROLLER_DEPLOY_KEY. The controller routes only what odin-deploy.sh and run-playbook.sh
-# in the DevOps repo allowlist, so the deploy job fails until raven-hosting is added there (it was
-# homebase-invites before the rename).
+# in the DevOps repo allowlist, so the deploy job fails until raven-hosting is added there.
 #
 
 env:

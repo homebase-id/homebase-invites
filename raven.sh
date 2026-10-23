@@ -8,17 +8,10 @@
 #   RAVEN_HOSTING_URL=https://invites.ravenhosting.cloud   (optional; this is the default)
 # Run `./raven.sh setup` once to write that file.
 #
-# From before the rename (invites.sh), ~/.homebase-invites and the HOMEBASE_INVITES_* variables still work
-# when the new ones are not there.
-#
 set -euo pipefail
 
 CONFIG="$HOME/.raven-hosting"
-OLD_CONFIG="$HOME/.homebase-invites"
-if [[ -f "$CONFIG" ]]; then source "$CONFIG"; elif [[ -f "$OLD_CONFIG" ]]; then source "$OLD_CONFIG"; fi
-RAVEN_HOSTING_CREATE_KEY="${RAVEN_HOSTING_CREATE_KEY:-${HOMEBASE_INVITES_CREATE_KEY:-}}"
-RAVEN_HOSTING_SIGNUP_KEY="${RAVEN_HOSTING_SIGNUP_KEY:-${HOMEBASE_INVITES_SIGNUP_KEY:-}}"
-RAVEN_HOSTING_URL="${RAVEN_HOSTING_URL:-${HOMEBASE_INVITES_URL:-}}"
+[[ -f "$CONFIG" ]] && source "$CONFIG"
 URL="${RAVEN_HOSTING_URL:-https://invites.ravenhosting.cloud}"
 API="$URL/api/v1/invitation-codes"
 PLANS="$URL/api/v1/plans"
