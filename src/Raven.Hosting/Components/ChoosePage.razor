@@ -17,30 +17,14 @@
         <ul class="plans">
             @foreach (var plan in Plans)
             {
-                var isCurrent = UpgradePage.SamePlan(plan.Id, CurrentPlanId);
-                @* Every card has the same parts in the same order, so on a desktop they line up across plans *@
-                <li class="@(isCurrent ? "card current" : "card")">
-                    <p class="storage">@plan.Storage</p>
-                    <h2>@plan.Name</h2>
-                    <p class="description">@plan.Description</p>
-                    <PlanDetails Plan="plan" ShowDescription="false" ShowStorage="false" />
-                    @if (isCurrent)
-                    {
-                        <p class="badge">Your plan</p>
-                    }
-                    else
-                    {
-                        <a class="button" href="@($"{UpgradePage.Root}/confirm?plan={Uri.EscapeDataString(plan.Id)}")">Choose @plan.Name</a>
-                    }
-                </li>
+                <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, CurrentPlanId)">
+                    <Action>
+                        <a class="button" href="@UpgradePage.ConfirmUrl(plan.Id)">Choose @plan.Name</a>
+                    </Action>
+                </PlanCard>
             }
         </ul>
     }
-
-    <form method="post" action="@($"{UpgradePage.Root}/sign-out")" class="sign-out">
-        <AntiforgeryField Token="Antiforgery" />
-        <button type="submit" class="secondary">Sign out</button>
-    </form>
 </SitePage>
 
 @code {
@@ -48,5 +32,4 @@
     [Parameter] public string? CurrentPlanId { get; set; }
     [Parameter] public string CurrentPlanName { get; set; } = "";
     [Parameter] public List<Plan> Plans { get; set; } = [];
-    [Parameter] public Microsoft.AspNetCore.Antiforgery.AntiforgeryTokenSet Antiforgery { get; set; } = null!;
 }

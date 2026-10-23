@@ -1,0 +1,87 @@
+@* ravenhosting.cloud: what hosting costs. Anyone can see the plans; choosing one needs signing in, and someone
+   signed in sees their own plan marked *@
+<SitePage Title="Private hosting for your Homebase" Wide="true"
+          Description="Raven Hosting hosts Homebase identities: your photos, chat and feed, encrypted, on your own domain. Start free; pay for more room.">
+    <Lead>
+        <p class="intro">
+            Your photos, chat and feed on your own Homebase identity, encrypted so only you can read them.
+            @if (Free != null)
+            {
+                <text>Start free with @Free.Storage, and move to a bigger plan when you need the room.</text>
+            }
+            else
+            {
+                <text>Start free, and move to a bigger plan when you need the room.</text>
+            }
+        </p>
+        <div class="actions">
+            <a class="button light" href="@SitePages.DefaultSignupUrl" data-signup>Create a free identity</a>
+            <a class="button on-dark" href="https://homebase.id">What is Homebase?</a>
+        </div>
+    </Lead>
+    <ChildContent>
+        <section aria-labelledby="plans-heading">
+            <h2 id="plans-heading" class="section-heading">Plans and prices</h2>
+            <p class="who">
+                @if (Identity == null)
+                {
+                    <text>Prices are in US dollars. <a href="@SitePages.SignIn">Sign in</a> with your Homebase identity to choose a plan.</text>
+                }
+                else
+                {
+                    <text>Signed in as <strong>@Identity</strong>.</text>
+                    @if (CurrentPlanName != null && !Shown.Any(p => UpgradePage.SamePlan(p.Id, CurrentPlanId)))
+                    {
+                        <text> Your plan is <strong>@CurrentPlanName</strong>.</text>
+                    }
+                    <text> Prices are in US dollars.</text>
+                }
+            </p>
+
+            <ul class="plans">
+                @if (Free != null)
+                {
+                    <PlanCard Plan="Free" IsFree="true" IsCurrent="UpgradePage.SamePlan(Free.Id, CurrentPlanId)" Action="@(Identity == null ? FreeAction : null)" />
+                }
+                @foreach (var plan in Plans)
+                {
+                    <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, CurrentPlanId)">
+                        <Action>
+                            @if (Identity == null)
+                            {
+                                <a class="button" href="@SitePages.SignInFor(plan.Id)">Sign in to choose</a>
+                            }
+                            else
+                            {
+                                <a class="button" href="@UpgradePage.ConfirmUrl(plan.Id)">Choose @plan.Name</a>
+                            }
+                        </Action>
+                    </PlanCard>
+                }
+            </ul>
+            @if (Plans.Count == 0)
+            {
+                <p class="muted">There are no paid plans for sale right now.</p>
+            }
+        </section>
+    </ChildContent>
+</SitePage>
+
+@code {
+    /// <summary>Who is signed in; null for a visitor</summary>
+    [Parameter] public string? Identity { get; set; }
+    [Parameter] public string? CurrentPlanId { get; set; }
+
+    /// <summary>The name of the owner's plan; null when it is not known</summary>
+    [Parameter] public string? CurrentPlanName { get; set; }
+
+    /// <summary>The plan a new identity starts on, shown first as "free"; null when there is none here</summary>
+    [Parameter] public Plan? Free { get; set; }
+
+    /// <summary>The plans for sale</summary>
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    private IEnumerable<Plan> Shown => Free == null ? Plans : Plans.Prepend(Free);
+
+    private readonly RenderFragment FreeAction = @<a class="button" href="@SitePages.DefaultSignupUrl" data-signup>Create a free identity</a>;
+}

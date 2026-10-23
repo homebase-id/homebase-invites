@@ -1,0 +1,71 @@
+@* Report content or a user that breaks the terms; filed reports are read with raven.sh reports *@
+<SitePage Title="Report content" Description="Report content on Raven Hosting that breaks the terms or the law.">
+    @if (Sent)
+    {
+        <div class="card">
+            <h2>Report sent</h2>
+            <p>Thank you. We read every report, and will contact you if we need more information.</p>
+            <p><a href="/report">Send another report</a></p>
+        </div>
+    }
+    else
+    {
+        <div class="prose">
+            <p>
+                Found content on Raven Hosting that breaks our <a href="/terms-and-conditions">terms and conditions</a>,
+                or the law? Tell us here, and we will look at it and remove the content or the user.
+            </p>
+            <p>
+                If it is child sexual abuse material (CSAM), report it to the police or your national authority as well.
+                <a href="https://support.google.com/websearch/answer/148666">Google's guide</a> says how in each country.
+            </p>
+        </div>
+
+        <form method="post" action="/report" class="card form">
+            <AntiforgeryField Token="Antiforgery" />
+            @if (Problem != null)
+            {
+                <p class="problem" role="alert">@Problem</p>
+            }
+            <label>
+                How can we reach you?
+                <span class="hint">Your email or Homebase identity, if we need to ask more</span>
+                <input type="text" name="ContactInfo" required maxlength="@ContentReportRequest.ShortMax" value="@Values.ContactInfo">
+            </label>
+            <label>
+                What are you reporting?
+                <span class="hint">A profile, a post, a photo…</span>
+                <input type="text" name="ContentType" required maxlength="@ContentReportRequest.ShortMax" value="@Values.ContentType">
+            </label>
+            <label>
+                What is wrong with it?
+                <span class="hint">It breaks the terms, it is illegal, it infringes copyright…</span>
+                <input type="text" name="Violation" required maxlength="@ContentReportRequest.ShortMax" value="@Values.Violation">
+            </label>
+            <label>
+                Who posted it?
+                <span class="hint">Their Homebase identity, or whatever identifies them</span>
+                <input type="text" name="ContentAuthor" required maxlength="@ContentReportRequest.ShortMax" value="@Values.ContentAuthor">
+            </label>
+            <label>
+                Where is it?
+                <span class="hint">A link to it, or how to find it</span>
+                <textarea name="Evidence" required rows="4" maxlength="@ContentReportRequest.LongMax">@Values.Evidence</textarea>
+            </label>
+            <label>
+                Anything else (optional)
+                <textarea name="Additional" rows="3" maxlength="@ContentReportRequest.LongMax">@Values.Additional</textarea>
+            </label>
+            <div class="actions">
+                <button type="submit">Send report</button>
+            </div>
+        </form>
+    }
+</SitePage>
+
+@code {
+    [Parameter] public bool Sent { get; set; }
+    [Parameter] public string? Problem { get; set; }
+    [Parameter] public ContentReportRequest Values { get; set; } = new(null, null, null, null, null, null);
+    [Parameter] public Microsoft.AspNetCore.Antiforgery.AntiforgeryTokenSet Antiforgery { get; set; } = null!;
+}

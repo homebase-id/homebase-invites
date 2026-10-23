@@ -13,7 +13,8 @@ using Raven.Hosting;
 // It holds the hosting plans, which admins manage with the create key (README, "Plans"), and grants them: it sets
 // the plan an identity is owed, and what the plan gives, on the identity host that serves it, with the plan key
 // (README, "Plan grants"). Owners buy bigger plans on the upgrade page, after signing in with YouAuth (README,
-// "Upgrade page").
+// "Upgrade page"), and anyone sees the plans on the site around it, at ravenhosting.cloud (SitePages), which also
+// takes reports of content that breaks the terms.
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,6 +28,8 @@ var store = new InvitationCodeStore(databasePath);
 var planStore = new PlanStore(databasePath);
 var grantStore = new PlanGrantStore(databasePath);
 builder.Services.AddSingleton(planStore);
+var reportStore = new ReportStore(databasePath);
+builder.Services.AddSingleton(reportStore);
 
 var planHosts = PlanHosts.FromConfiguration(builder.Configuration);
 builder.Services.AddSingleton(planHosts);
@@ -50,7 +53,7 @@ builder.Services.AddRazorComponents();
 builder.Services.AddAntiforgery(options =>
 {
     options.Cookie.Name = "raven_upgrade_antiforgery";
-    options.Cookie.Path = UpgradePage.Root;
+    options.Cookie.Path = "/";
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 });
 
@@ -96,6 +99,14 @@ app.UseAntiforgery();
 app.MapGet("/ping", () => "pong");
 
 UpgradePage.Map(app);
+SitePages.Map(app);
+
+// The reports filed on the site's report page, newest first
+app.MapGet(ReportApi.Root, async (int? sinceDays) =>
+        await reportStore.ListAsync(sinceDays is > 0
+            ? DateTimeOffset.UtcNow.AddDays(-sinceDays.Value).ToUnixTimeMilliseconds()
+            : null))
+    .WithMetadata(new ApiKey(createApiKey));
 
 var root = app.MapGroup(InvitationCodeApi.Root).AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid);
 
@@ -343,6 +354,11 @@ internal sealed class ApiKey(string key)
 internal static class PlanApi
 {
     public const string Root = "/api/v1/plans";
+}
+
+internal static class ReportApi
+{
+    public const string Root = "/api/v1/reports";
 }
 
 internal static class PlanGrantApi
