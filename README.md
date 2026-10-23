@@ -308,6 +308,27 @@ Security:
   survive a restart. They are not encrypted at rest (the service logs a warning saying so): protect the
   database file.
 
+## Admin pages
+
+`/admin` on the site does everything `raven.sh` does with the create key, for people rather than a shared key:
+plans and their prices, grants (give a plan, retry), invitation codes (make, change, disable, take or give back a
+use as a signup would) and their stats, who may buy, and content reports. The overview shows how each stands and
+the grants that need a look.
+
+- **Who:** admins sign in with their own Homebase identity, the same YouAuth sign-in as the upgrade page (one hour).
+  Who is an admin is a list in the database, managed with the create key: `raven.sh admins add <identity>`, `admins
+  remove`, `admins` (`/api/v1/admins`: `GET /`, `PUT /<identity>`, `DELETE /<identity>`). There are none at first.
+  Someone not signed in is sent to sign in and back (`/sign-in?next=admin`); someone signed in who is not an admin
+  gets a 404 "Not found". Admins see an **Admin** link in the site's header.
+- **Changes** are forms with the antiforgery token, each answered with a redirect back saying what it did or why
+  it was refused; a refused form comes back as it was sent. Each change is logged (`Raven.Hosting.Admin`) with who
+  made it.
+- **Look:** Tailwind CSS, responsive, its own stylesheet apart from the site's: `src/Raven.Hosting/Styles/admin.css`
+  and the classes in `Components/Admin/` build into `wwwroot/assets/admin.css`, which is committed. After changing
+  an admin page's classes, run `./build-admin-css.sh` (it fetches Tailwind's standalone CLI, pinned and checksummed,
+  into `.tools/`; no Node). CI fails when the committed stylesheet is not what the sources build
+  (`./build-admin-css.sh --check`).
+
 ## Configuration
 
 | Key | Value |

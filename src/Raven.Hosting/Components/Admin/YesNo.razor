@@ -1,0 +1,13 @@
+@* A yes or no in a table: yes in brand colour, no faded *@
+@if (Value)
+{
+    <span class="font-semibold text-brand">yes</span>
+}
+else
+{
+    <span class="text-muted">no</span>
+}
+
+@code {
+    [Parameter] public bool Value { get; set; }
+}

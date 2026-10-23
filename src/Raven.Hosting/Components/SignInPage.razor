@@ -1,6 +1,11 @@
 @* Who to sign in: their identity, then YouAuth on it (/upgrade?id=), back to the plan they chose, if they chose one *@
 <SitePage Title="Sign in" ShowSignIn="false">
     <form method="get" action="@UpgradePage.Root" class="card sign-in">
+        @if (ToAdmin)
+        {
+            <input type="hidden" name="next" value="@UpgradePage.NextAdmin">
+            <p>Sign in to the admin pages.</p>
+        }
         @if (Plan != null)
         {
             <input type="hidden" name="plan" value="@Plan.Id">
@@ -29,4 +34,7 @@
     [Parameter] public Plan? Plan { get; set; }
     [Parameter] public string? Identity { get; set; }
     [Parameter] public string? Problem { get; set; }
+
+    /// <summary>Back to the admin pages after signing in</summary>
+    [Parameter] public bool ToAdmin { get; set; }
 }

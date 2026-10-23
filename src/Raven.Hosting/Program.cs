@@ -32,6 +32,9 @@ var reportStore = new ReportStore(databasePath);
 builder.Services.AddSingleton(reportStore);
 var purchaseAccess = new PurchaseAccessStore(databasePath);
 builder.Services.AddSingleton(purchaseAccess);
+var adminStore = new AdminStore(databasePath);
+builder.Services.AddSingleton(adminStore);
+builder.Services.AddSingleton(store);
 
 var planHosts = PlanHosts.FromConfiguration(builder.Configuration);
 builder.Services.AddSingleton(planHosts);
@@ -103,6 +106,7 @@ app.MapGet("/ping", () => "pong");
 
 UpgradePage.Map(app);
 SitePages.Map(app);
+AdminPages.Map(app);
 
 // The reports filed on the site's report page, newest first
 app.MapGet(ReportApi.Root, async (int? sinceDays) =>
@@ -232,23 +236,12 @@ plansApi.MapDelete("/{id}/prices/{months:int}", async (string id, int months) =>
 
 // Only a plan no code or grant uses; to retire one in use, mark it not for sale
 plansApi.MapDelete("/{id}", async (string id) =>
-{
-    if (await planStore.GetAsync(id) is not { } plan)
+    await AdminPages.DeletePlanAsync(planStore, store, grantStore, id) switch
     {
-        return Results.NotFound();
-    }
-
-    var codes = await store.CountWithPlanAsync(plan.Id);
-    var grants = await grantStore.CountWithPlanAsync(plan.Id);
-    if (codes > 0 || grants > 0)
-    {
-        return Results.Conflict($"Plan {plan.Id} is used by {codes} code(s) and {grants} grant(s); " +
-                                "mark it not for sale instead");
-    }
-
-    await planStore.DeleteAsync(plan.Id);
-    return Results.NoContent();
-});
+        (false, _) => Results.NotFound(),
+        (true, { } conflict) => Results.Conflict(conflict),
+        _ => Results.NoContent(),
+    });
 
 //
 // Plan grants, create key: admins now, the payment flow later (as purchase grants)
@@ -273,6 +266,22 @@ purchasesApi.MapPut("/testers/{identity}", async (string identity, TimeProvider 
 
 purchasesApi.MapDelete("/testers/{identity}", async (string identity) =>
     await purchaseAccess.RemoveTesterAsync(identity) is { } access ? Results.Ok(access) : Results.NotFound());
+
+//
+// Who may use the admin pages, create key: the first admins are added here (raven.sh admins add)
+//
+
+var adminsApi = app.MapGroup(AdminApi.Root)
+    .AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid)
+    .WithMetadata(new ApiKey(createApiKey));
+
+adminsApi.MapGet("/", async () => await adminStore.ListAsync());
+
+adminsApi.MapPut("/{identity}", async (string identity, TimeProvider time) =>
+    await adminStore.AddAsync(identity, time.GetUtcNow().ToUnixTimeMilliseconds()));
+
+adminsApi.MapDelete("/{identity}", async (string identity) =>
+    await adminStore.RemoveAsync(identity) is { } admins ? Results.Ok(admins) : Results.NotFound());
 
 var grants = app.MapGroup(PlanGrantApi.Root)
     .AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid)
@@ -382,6 +391,11 @@ internal static class PlanApi
 internal static class ReportApi
 {
     public const string Root = "/api/v1/reports";
+}
+
+internal static class AdminApi
+{
+    public const string Root = "/api/v1/admins";
 }
 
 internal static class PurchaseApi

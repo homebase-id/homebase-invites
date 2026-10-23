@@ -1,0 +1,6 @@
+@* The form's antiforgery token, for every admin form that changes something *@
+<input type="hidden" name="@Admin.Antiforgery.FormFieldName" value="@Admin.Antiforgery.RequestToken">
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+}

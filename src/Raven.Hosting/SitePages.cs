@@ -27,6 +27,9 @@ public static class SitePages
 
     public static string SignInFor(string planId) => $"{SignIn}?plan={Uri.EscapeDataString(planId)}";
 
+    /// <summary>Signing in to the admin pages: back to them afterwards</summary>
+    public const string SignInForAdmin = SignIn + "?next=admin";
+
     public static void Map(WebApplication app)
     {
         app.MapGet("/", async (HttpContext context, UpgradeOptions options, UpgradeSession session, PlanService plans,
@@ -62,8 +65,8 @@ public static class SitePages
         });
 
         // Whom to sign in; the form goes to the upgrade page, which starts YouAuth. Someone signed in goes on
-        app.MapGet(SignIn, async (HttpContext context, string? plan, UpgradeOptions options, UpgradeSession session,
-            PlanStore planStore) =>
+        app.MapGet(SignIn, async (HttpContext context, string? plan, string? next, UpgradeOptions options,
+            UpgradeSession session, PlanStore planStore) =>
         {
             if (!options.Enabled)
             {
@@ -71,12 +74,14 @@ public static class SitePages
             }
 
             var chosen = await planStore.GetAsync(plan) is { } p && UpgradePage.IsForSale(p) ? p : null;
+            var toAdmin = next == UpgradePage.NextAdmin;
             if (session.Read(context) != null)
             {
-                return Results.Redirect(chosen == null ? UpgradePage.Root : UpgradePage.ConfirmUrl(chosen.Id));
+                return Results.Redirect(toAdmin ? AdminPages.Root
+                    : chosen == null ? UpgradePage.Root : UpgradePage.ConfirmUrl(chosen.Id));
             }
 
-            return UpgradePage.Show<SignInPage>(new { Plan = chosen });
+            return UpgradePage.Show<SignInPage>(new { Plan = toAdmin ? null : chosen, ToAdmin = toAdmin });
         });
 
         app.MapGet("/terms-and-conditions", (UpgradeOptions options) =>

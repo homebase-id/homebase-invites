@@ -1,0 +1,74 @@
+@* How the codes are doing: in total, by source, owner and plan, and per week; signups over a chosen time *@
+<AdminLayout Admin="Admin" Title="How codes are doing" Section="stats">
+    <form method="get" action="@($"{AdminPages.Root}/codes/stats")" class="mb-6 flex flex-wrap items-end gap-3">
+        <label class="field">
+            Count signups from
+            <select class="input" name="days" onchange="this.form.submit()">
+                @foreach (var (days, label) in Periods)
+                {
+                    <option value="@days" selected="@(Days == days)">@label</option>
+                }
+            </select>
+        </label>
+        <noscript><button type="submit" class="btn btn-secondary">Show</button></noscript>
+        <p class="pb-2 text-xs text-muted">Only signups are counted over that time; the code counts are always every code as it is now.</p>
+    </form>
+
+    <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
+        @foreach (var (label, value, hint) in Cards)
+        {
+            <div class="panel">
+                <p class="text-xs font-semibold tracking-wide text-muted uppercase">@label</p>
+                <p class="mt-1 font-heading text-2xl font-bold text-brand sm:text-3xl">@value</p>
+                <p class="mt-1 text-xs text-muted">@hint</p>
+            </div>
+        }
+    </div>
+
+    <div class="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Breakdown Title="By source" Lines="Stats.BySource" Empty="(no source)" />
+        <Breakdown Title="By plan" Lines="Stats.ByPlan" Empty="(no plan)" />
+        <Breakdown Title="By owner" Lines="Stats.ByOwner" Empty="(no owner)" />
+
+        <section class="panel">
+            <h2 class="panel-title">Signups per week</h2>
+            @if (Stats.ByWeek.Count == 0)
+            {
+                <p class="text-sm text-muted">No signups@(Days != null ? " in that time" : "").</p>
+            }
+            else
+            {
+                var most = Math.Max(1, Stats.ByWeek.Max(w => w.Signups));
+                <ul class="space-y-1 text-sm">
+                    @foreach (var week in Stats.ByWeek)
+                    {
+                        <li class="grid grid-cols-[6.5rem_1fr_3rem] items-center gap-3">
+                            <span class="text-xs text-muted tabular-nums">@week.Week</span>
+                            <span class="h-2 rounded-full bg-line"><span class="block h-2 rounded-full bg-brand" style="width: @(week.Signups * 100 / most)%"></span></span>
+                            <span class="text-right tabular-nums">@week.Signups</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    </div>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter, EditorRequired] public InvitationCodeStats Stats { get; set; } = null!;
+
+    /// <summary>Signups counted from this many days ago; null counts all of them</summary>
+    [Parameter] public int? Days { get; set; }
+
+    private static readonly (int? Days, string Label)[] Periods =
+        [(null, "the start"), (7, "the last 7 days"), (30, "the last 30 days"), (90, "the last 90 days"), (365, "the last year")];
+
+    private (string Label, string Value, string Hint)[] Cards =>
+    [
+        ("Codes", Stats.Totals.Codes.ToString(), $"{Stats.Totals.UsesAllowed} uses allowed"),
+        ("Signups", Stats.Totals.Signups.ToString(), Days == null ? "since the start" : $"in the last {Days} days"),
+        ("Left", Stats.Totals.UsesLeft.ToString(), "signups the codes still allow"),
+        ("Never used · used up · disabled", $"{Stats.NeverUsed} · {Stats.UsedUp} · {Stats.Disabled}", "codes"),
+    ];
+}

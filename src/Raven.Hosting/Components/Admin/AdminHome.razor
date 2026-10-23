@@ -1,0 +1,101 @@
+@* The overview: how plans, grants, codes, buying and reports stand, the grants that need a look, and the admins *@
+<AdminLayout Admin="Admin" Title="Overview" Section="home">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <a href="@($"{AdminPages.Root}/plans")" class="panel block no-underline hover:border-brand">
+            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Plans</p>
+            <p class="mt-1 font-heading text-3xl font-bold text-brand">@Plans.Count</p>
+            <p class="mt-1 text-sm text-muted">@Plans.Count(UpgradePage.IsForSale) for sale</p>
+        </a>
+        <a href="@($"{AdminPages.Root}/grants")" class="panel block no-underline hover:border-brand">
+            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Grants</p>
+            <p class="mt-1 font-heading text-3xl font-bold text-brand">@Grants.Count</p>
+            <p class="mt-1 text-sm">
+                <span class="@(Failed.Count > 0 ? "font-semibold text-red-700" : "text-muted")">@Failed.Count failed</span>
+                <span class="text-muted">·</span>
+                <span class="@(Pending.Count > 0 ? "font-semibold text-amber-700" : "text-muted")">@Pending.Count pending</span>
+            </p>
+        </a>
+        <a href="@($"{AdminPages.Root}/codes")" class="panel block no-underline hover:border-brand">
+            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Codes</p>
+            <p class="mt-1 font-heading text-3xl font-bold text-brand">@Stats.Totals.Codes</p>
+            <p class="mt-1 text-sm text-muted">@Stats.Totals.Signups signups · @Stats.Totals.UsesLeft left</p>
+        </a>
+        <a href="@($"{AdminPages.Root}/purchases")" class="panel block no-underline hover:border-brand">
+            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Buying</p>
+            <p class="mt-1 font-heading text-3xl font-bold @(Access.Open ? "text-green" : "text-amber-700")">@(Access.Open ? "Open" : "Closed")</p>
+            <p class="mt-1 text-sm text-muted">@Access.Testers.Count tester@(Access.Testers.Count == 1 ? "" : "s")</p>
+        </a>
+        <a href="@($"{AdminPages.Root}/reports?days=7")" class="panel block no-underline hover:border-brand">
+            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Reports</p>
+            <p class="mt-1 font-heading text-3xl font-bold @(RecentReports > 0 ? "text-red-700" : "text-brand")">@RecentReports</p>
+            <p class="mt-1 text-sm text-muted">in the last 7 days</p>
+        </a>
+    </div>
+
+    <section class="panel mt-6">
+        <h2 class="panel-title">Grants that need a look</h2>
+        @if (Failed.Count + Pending.Count == 0)
+        {
+            <p class="text-sm text-muted">None: every grant is applied.</p>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead><tr><th>Id</th><th>Identity</th><th>Plan</th><th>Status</th><th>Attempts</th><th>Last error</th><th></th></tr></thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var grant in Failed.Concat(Pending).Take(20))
+                        {
+                            <tr>
+                                <td class="tabular-nums">@grant.Id</td>
+                                <td><a class="link" href="@($"{AdminPages.Root}/grants?identity={Uri.EscapeDataString(grant.Identity)}")">@grant.Identity</a></td>
+                                <td>@grant.PlanId</td>
+                                <td><StatusTag Text="@grant.Status" /></td>
+                                <td class="tabular-nums">@grant.Attempts</td>
+                                <td class="max-w-xs text-xs break-words text-muted">@grant.LastError</td>
+                                <td>
+                                    <form method="post" action="@($"{AdminPages.Root}/grants/{grant.Id}/retry")">
+                                        <Csrf Admin="Admin" />
+                                        <input type="hidden" name="back" value="@AdminPages.Root">
+                                        <button type="submit" class="btn btn-small btn-secondary">Retry</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="panel mt-6">
+        <h2 class="panel-title">Admins</h2>
+        <ul class="divide-y divide-line text-sm">
+            @foreach (var admin in Admins)
+            {
+                <li class="flex flex-wrap items-center justify-between gap-2 py-2">
+                    <span class="flex items-center gap-2 font-semibold">
+                        <img src="@PublicProfiles.ImageUrl(admin.Identity)" alt="" width="24" height="24" referrerpolicy="no-referrer"
+                             class="size-6 rounded-full bg-line object-cover">
+                        @admin.Identity
+                    </span>
+                    <span class="text-xs text-muted">added @AdminForm.When(admin.AddedAt)</span>
+                </li>
+            }
+        </ul>
+        <p class="mt-3 text-xs text-muted">Add and remove admins with <code class="rounded bg-page px-1">./raven.sh admins add &lt;identity&gt;</code> and <code class="rounded bg-page px-1">./raven.sh admins remove &lt;identity&gt;</code>.</p>
+    </section>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+    [Parameter] public List<PlanGrant> Grants { get; set; } = [];
+    [Parameter] public InvitationCodeStats Stats { get; set; } = null!;
+    [Parameter] public PurchaseAccess Access { get; set; } = null!;
+    [Parameter] public int RecentReports { get; set; }
+    [Parameter] public List<Raven.Hosting.Admin> Admins { get; set; } = [];
+
+    private List<PlanGrant> Failed => Grants.Where(g => g.Status == PlanGrantStatus.Failed).ToList();
+    private List<PlanGrant> Pending => Grants.Where(g => g.Status == PlanGrantStatus.Pending).ToList();
+}

@@ -1,0 +1,114 @@
+/*
+ * The admin pages' stylesheet: Tailwind CSS, built by ./build-admin-css.sh into wwwroot/assets/admin.css from the
+ * classes in Components/Admin/. The public site keeps its own hand-written site.css; the two never load together.
+ */
+
+@import "tailwindcss" source(none);
+@source "../Components/Admin";
+
+@font-face {
+  font-family: Montserrat;
+  src: url("fonts/Montserrat-VariableFont_wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Montserrat Alternates";
+  src: url("fonts/MontserratAlternates-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+
+/* The site's palette (site.css), as Tailwind colours: bg-brand, text-teal, border-line... */
+@theme {
+  --font-sans: Montserrat, ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Montserrat Alternates", Montserrat, ui-sans-serif, sans-serif;
+  --color-brand: #603e90;
+  --color-brand-dark: #4c3073;
+  --color-brand-tint: #f3eff8;
+  --color-teal: #2e7b85;
+  --color-green: #00966d;
+  --color-green-tint: #e3f4ee;
+  --color-slate-brand: #486a92;
+  --color-ink: #1f2937;
+  --color-muted: #6b7280;
+  --color-line: #e5e7eb;
+  --color-page: #f8f8fb;
+}
+
+/* Shared pieces, so every page's forms, buttons and tables look the same */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-brand bg-brand px-4 py-2 text-sm font-semibold text-white no-underline transition hover:border-brand-dark hover:bg-brand-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply border-line bg-white text-ink hover:border-brand hover:bg-brand-tint;
+  }
+
+  .btn-danger {
+    @apply border-red-700 bg-red-700 hover:border-red-800 hover:bg-red-800;
+  }
+
+  .btn-small {
+    @apply px-3 py-1 text-xs;
+  }
+
+  .field {
+    @apply block text-sm font-semibold text-ink;
+  }
+
+  .field-hint {
+    @apply mt-1 block text-xs font-normal text-muted;
+  }
+
+  .input {
+    @apply mt-1 block w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal text-ink shadow-xs focus:border-brand focus:ring-2 focus:ring-brand/20 focus:outline-none;
+  }
+
+  .check {
+    @apply flex items-center gap-2 text-sm font-semibold text-ink;
+  }
+
+  .check input {
+    @apply size-4 accent-brand;
+  }
+
+  .panel {
+    @apply rounded-xl border border-line bg-white p-4 shadow-xs sm:p-6;
+  }
+
+  .panel-title {
+    @apply mb-4 font-heading text-lg font-bold text-ink;
+  }
+
+  .table-wrap {
+    @apply -mx-4 overflow-x-auto sm:mx-0;
+  }
+
+  .table {
+    @apply min-w-full divide-y divide-line text-left text-sm;
+  }
+
+  .table th {
+    @apply whitespace-nowrap px-3 py-2 text-xs font-semibold tracking-wide text-muted uppercase;
+  }
+
+  .table td {
+    @apply px-3 py-2 align-top;
+  }
+
+  .table tbody tr {
+    @apply hover:bg-page;
+  }
+
+  .tag {
+    @apply inline-block rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap;
+  }
+
+  .link {
+    @apply font-semibold text-brand underline-offset-2 hover:underline;
+  }
+}

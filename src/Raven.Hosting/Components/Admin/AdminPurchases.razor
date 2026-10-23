@@ -1,0 +1,62 @@
+@* Who may buy on the site: everyone when open, the testers while closed *@
+<AdminLayout Admin="Admin" Title="Who may buy" Section="purchases">
+    <section class="panel">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <p class="font-heading text-xl font-bold @(Access.Open ? "text-green" : "text-amber-700")">
+                    Purchases are @(Access.Open ? "open" : "closed")
+                </p>
+                <p class="mt-1 text-sm text-muted">
+                    @(Access.Open
+                        ? "Anyone signed in can buy a plan."
+                        : "Everyone can see the plans and sign in; only the testers below can check out. Admin grants are not affected.")
+                </p>
+            </div>
+            <form method="post" action="@($"{AdminPages.Root}/purchases/open")"
+                  onsubmit="@(Access.Open ? "return confirm('Close purchases? Only testers will be able to buy.')" : "return confirm('Open purchases to everyone? There is no real payment yet.')")">
+                <Csrf Admin="Admin" />
+                <input type="hidden" name="open" value="@(Access.Open ? "false" : "true")">
+                <button type="submit" class="btn @(Access.Open ? "btn-danger" : "")">@(Access.Open ? "Close purchases" : "Open purchases")</button>
+            </form>
+        </div>
+    </section>
+
+    <section class="panel mt-6">
+        <h2 class="panel-title">Testers</h2>
+        <form method="post" action="@($"{AdminPages.Root}/purchases/testers")" class="mb-4 flex flex-wrap items-end gap-3">
+            <Csrf Admin="Admin" />
+            <label class="field grow sm:grow-0">
+                Identity
+                <input class="input sm:w-72" name="identity" required autocapitalize="none" spellcheck="false" inputmode="url" placeholder="frodo.homebase.id">
+            </label>
+            <button type="submit" class="btn">Add tester</button>
+        </form>
+        @if (Access.Testers.Count == 0)
+        {
+            <p class="text-sm text-muted">No testers.</p>
+        }
+        else
+        {
+            <ul class="divide-y divide-line">
+                @foreach (var tester in Access.Testers)
+                {
+                    <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                        <span>
+                            <span class="font-semibold">@tester.Identity</span>
+                            <span class="ml-1 text-xs text-muted">added @AdminForm.When(tester.AddedAt)</span>
+                        </span>
+                        <form method="post" action="@($"{AdminPages.Root}/purchases/testers/{Uri.EscapeDataString(tester.Identity)}/remove")">
+                            <Csrf Admin="Admin" />
+                            <button type="submit" class="btn btn-small btn-secondary">Remove</button>
+                        </form>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter, EditorRequired] public PurchaseAccess Access { get; set; } = null!;
+}

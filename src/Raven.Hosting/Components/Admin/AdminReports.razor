@@ -1,0 +1,51 @@
+@* The content reports filed on the site's report page, newest first *@
+<AdminLayout Admin="Admin" Title="Content reports" Section="reports">
+    <form method="get" action="@($"{AdminPages.Root}/reports")" class="mb-6 flex flex-wrap items-end gap-3">
+        <label class="field">
+            Filed in
+            <select class="input" name="days" onchange="this.form.submit()">
+                @foreach (var (days, label) in Periods)
+                {
+                    <option value="@days" selected="@(Days == days)">@label</option>
+                }
+            </select>
+        </label>
+        <noscript><button type="submit" class="btn btn-secondary">Show</button></noscript>
+    </form>
+
+    @if (Reports.Count == 0)
+    {
+        <div class="panel"><p class="text-sm text-muted">No reports@(Days != null ? " in that time" : "").</p></div>
+    }
+    <div class="space-y-4">
+        @foreach (var report in Reports)
+        {
+            <article class="panel">
+                <header class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                    <h2 class="font-heading text-lg font-bold">#@report.Id: @report.Violation</h2>
+                    <span class="text-xs text-muted">@AdminForm.When(report.CreatedAt)</span>
+                </header>
+                <dl class="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[9rem_1fr]">
+                    <dt class="font-semibold text-muted">From</dt><dd class="break-words">@report.ContactInfo</dd>
+                    <dt class="font-semibold text-muted">About</dt><dd class="break-words">@report.ContentType, by @report.ContentAuthor</dd>
+                    <dt class="font-semibold text-muted">Where</dt><dd class="break-words whitespace-pre-line">@report.Evidence</dd>
+                    @if (report.Additional != "")
+                    {
+                        <dt class="font-semibold text-muted">Also</dt><dd class="break-words whitespace-pre-line">@report.Additional</dd>
+                    }
+                </dl>
+            </article>
+        }
+    </div>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter] public List<ContentReport> Reports { get; set; } = [];
+
+    /// <summary>Only reports from this many days ago; null for all of them</summary>
+    [Parameter] public int? Days { get; set; }
+
+    private static readonly (int? Days, string Label)[] Periods =
+        [(null, "any time"), (1, "the last day"), (7, "the last 7 days"), (30, "the last 30 days"), (365, "the last year")];
+}

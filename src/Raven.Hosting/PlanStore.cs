@@ -138,8 +138,9 @@ public class PlanConflictException(string message) : Exception(message);
 /// </summary>
 public static class PlanIds
 {
-    // "grants" would be /api/v1/plans/grants, the grants' own route
-    public static readonly string[] Reserved = ["grants"];
+    // "grants" would be /api/v1/plans/grants, the grants' own route; "admin" is what /sign-in?next= takes to go on to
+    // the admin pages, where a plan Id goes on to confirming it
+    public static readonly string[] Reserved = ["grants", "admin"];
 
     private static readonly Regex Format = new(@"^[A-Za-z0-9._-]{1,64}$", RegexOptions.Compiled);
 

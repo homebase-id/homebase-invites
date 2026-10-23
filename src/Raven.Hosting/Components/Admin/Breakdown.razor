@@ -1,0 +1,36 @@
+@* One breakdown of the code stats: a line per source, owner or plan *@
+<section class="panel">
+    <h2 class="panel-title">@Title</h2>
+    @if (Lines.Count == 0)
+    {
+        <p class="text-sm text-muted">No codes.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th></th><th class="text-right">Codes</th><th class="text-right">Allowed</th><th class="text-right">Signups</th><th class="text-right">Left</th></tr></thead>
+                <tbody class="divide-y divide-line">
+                    @foreach (var line in Lines)
+                    {
+                        <tr>
+                            <td class="break-words">@(line.Name ?? Empty)</td>
+                            <td class="text-right tabular-nums">@line.Codes</td>
+                            <td class="text-right tabular-nums">@line.UsesAllowed</td>
+                            <td class="text-right tabular-nums">@line.Signups</td>
+                            <td class="text-right tabular-nums">@line.UsesLeft</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public List<InvitationCodeStatsLine> Lines { get; set; } = [];
+
+    /// <summary>What a line without a name is called</summary>
+    [Parameter] public string Empty { get; set; } = "";
+}
