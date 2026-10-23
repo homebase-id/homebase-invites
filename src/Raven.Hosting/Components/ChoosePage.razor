@@ -1,0 +1,52 @@
+@* Step 1: the plans for sale, the owner's own marked *@
+<SitePage Title="Choose a plan" Step="0">
+    <p class="who">
+        Signed in as <strong>@Identity</strong>.
+        @if (!Plans.Any(p => UpgradePage.SamePlan(p.Id, CurrentPlanId)))
+        {
+            <text>Your plan is <strong>@CurrentPlanName</strong>.</text>
+        }
+    </p>
+
+    @if (Plans.Count == 0)
+    {
+        <p>There are no plans for sale right now.</p>
+    }
+    else
+    {
+        <ul class="plans">
+            @foreach (var plan in Plans)
+            {
+                var isCurrent = UpgradePage.SamePlan(plan.Id, CurrentPlanId);
+                <li class="@(isCurrent ? "card current" : "card")">
+                    <p class="storage">@plan.Storage</p>
+                    <div>
+                        @if (isCurrent)
+                        {
+                            <p class="badge">Your plan</p>
+                        }
+                        <h2>@plan.Name</h2>
+                        <PlanDetails Plan="plan" ShowStorage="false" />
+                        @if (!isCurrent)
+                        {
+                            <a class="button" href="@($"{UpgradePage.Root}/confirm?plan={Uri.EscapeDataString(plan.Id)}")">Choose @plan.Name</a>
+                        }
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+
+    <form method="post" action="@($"{UpgradePage.Root}/sign-out")" class="sign-out">
+        <AntiforgeryField Token="Antiforgery" />
+        <button type="submit" class="secondary">Sign out</button>
+    </form>
+</SitePage>
+
+@code {
+    [Parameter] public string Identity { get; set; } = "";
+    [Parameter] public string? CurrentPlanId { get; set; }
+    [Parameter] public string CurrentPlanName { get; set; } = "";
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+    [Parameter] public Microsoft.AspNetCore.Antiforgery.AntiforgeryTokenSet Antiforgery { get; set; } = null!;
+}

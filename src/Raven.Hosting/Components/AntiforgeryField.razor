@@ -1,0 +1,6 @@
+@* The form's antiforgery token, made by the endpoint (UpgradePage.Antiforgery) *@
+<input type="hidden" name="@Token.FormFieldName" value="@Token.RequestToken">
+
+@code {
+    [Parameter, EditorRequired] public Microsoft.AspNetCore.Antiforgery.AntiforgeryTokenSet Token { get; set; } = null!;
+}

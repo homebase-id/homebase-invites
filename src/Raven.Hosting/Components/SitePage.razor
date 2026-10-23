@@ -1,0 +1,34 @@
+@* Every upgrade page: Homebase's gradient header with the name, the page's title and the steps, then the page *@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@Title - Raven Hosting</title>
+<link rel="stylesheet" href="@SiteAssets.Stylesheet">
+</head>
+<body>
+<header class="site-header">
+    <div class="frame">
+        <a class="wordmark" href="@UpgradePage.Root">Raven Hosting</a>
+        <h1>@Title</h1>
+        @if (Step != null)
+        {
+            <Steps Current="Step.Value" />
+        }
+    </div>
+</header>
+<main class="frame">
+    @ChildContent
+</main>
+</body>
+</html>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>Which of the four steps this page is, from 0; null for a page outside them</summary>
+    [Parameter] public int? Step { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

@@ -241,6 +241,11 @@ Where an owner gets a bigger plan. Their owner console sends them to
 A plan not for sale cannot be confirmed, checked out or bought (400). The done page names the plan bought even
 once it is no longer for sale.
 
+The pages are Razor components (`src/Raven.Hosting/Components`), rendered on the server by the endpoints in
+`UpgradePage.cs`, with no JavaScript. They look like homebase.id: `wwwroot/assets/site.css` holds the colors, the
+gradient and the pill buttons, and Montserrat and Montserrat Alternates are served from `wwwroot/assets/fonts`, so
+nothing loads from anyone else. A plan for sale with no price yet is not shown.
+
 **Back to your Homebase** goes to `https://<identity>/owner/settings/plan` (`UpgradePage.ReturnUrl`, the one
 place to change it).
 

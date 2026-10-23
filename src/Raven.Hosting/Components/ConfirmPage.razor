@@ -1,0 +1,29 @@
+@* Step 2: the change, and how to pay *@
+<SitePage Title="Confirm your new plan" Step="1">
+    <div class="card">
+        <p class="muted">Change your plan from <strong>@CurrentPlanName</strong> to</p>
+        <h2>@Plan.Name</h2>
+        <PlanDetails Plan="Plan" ShowPrices="false" />
+    </div>
+
+    <form method="get" action="@($"{UpgradePage.Root}/checkout")" class="card terms">
+        <input type="hidden" name="plan" value="@Plan.Id">
+        <fieldset>
+            <legend>How would you like to pay?</legend>
+            @for (var i = 0; i < Plan.Prices.Count; i++)
+            {
+                var price = Plan.Prices[i];
+                <label><input type="radio" name="months" value="@price.Months" checked="@(i == 0)"> <PriceLabel Plan="Plan" Price="price" /></label>
+            }
+        </fieldset>
+        <div class="actions">
+            <button type="submit">Continue to checkout</button>
+            <a class="button secondary" href="@UpgradePage.Root">Back</a>
+        </div>
+    </form>
+</SitePage>
+
+@code {
+    [Parameter] public Plan Plan { get; set; } = null!;
+    [Parameter] public string CurrentPlanName { get; set; } = "";
+}

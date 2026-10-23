@@ -1,0 +1,17 @@
+@* A page that only says something: an error, or that the owner is signed out *@
+<SitePage Title="@Title">
+    <div class="card">
+        <p>@Message</p>
+        @if (LinkHref != null)
+        {
+            <p><a href="@LinkHref">@LinkText</a></p>
+        }
+    </div>
+</SitePage>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public string? LinkText { get; set; }
+    [Parameter] public string? LinkHref { get; set; }
+}

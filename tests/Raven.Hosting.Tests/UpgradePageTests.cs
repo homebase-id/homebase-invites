@@ -73,7 +73,7 @@ public class UpgradePageTests
         var page = await SignInAsync();
 
         Assert.That(page, Does.Contain($"Signed in as <strong>{Frodo}</strong>"));
-        Assert.That(page, Does.Contain("Your plan: <strong>Free</strong>"),
+        Assert.That(page, Does.Contain("Your plan is <strong>Free</strong>"),
             "free is not for sale, so it is named above the cards, by its name");
         Assert.That(page, Does.Contain("Choose Veterans"));
         Assert.That(page, Does.Contain("Choose Registered"));
@@ -89,14 +89,14 @@ public class UpgradePageTests
 
         var cards = page.Split("<li class=\"card")[1..];
         Assert.That(cards, Has.Length.EqualTo(2));
-        Assert.That(cards[0], Does.Contain("<h2>Registered</h2>").And.Contain("10 GB of storage")
+        Assert.That(cards[0], Does.Contain("<h2>Registered</h2>").And.Contain("<p class=\"storage\">10 GB</p>")
             .And.Contain("A public home page").And.Contain("<li>$10 / year</li>")
             .And.Not.Contain("save"), "no monthly price to save on");
         Assert.That(cards[1], Does.Contain("<h2>Veterans</h2>").And.Contain("For those who served")
-            .And.Contain("1 TB of storage")
+            .And.Contain("<p class=\"storage\">1 TB</p>")
             .And.Contain("<li>$5 / month</li>")
-            .And.Contain("<li>$50 / year <span class=\"save\">save 17%</span></li>")
-            .And.Contain("<li>$90 / 2 years <span class=\"save\">save 25%</span></li>"));
+            .And.Contain("<li>$50 / year<span class=\"save\">save 17%</span></li>")
+            .And.Contain("<li>$90 / 2 years<span class=\"save\">save 25%</span></li>"));
     }
 
     [Test]
@@ -122,7 +122,7 @@ public class UpgradePageTests
         Assert.That(page, Does.Contain("Your plan</p>"));
         Assert.That(page, Does.Not.Contain("Choose Veterans"));
         Assert.That(page, Does.Contain("Choose Registered"));
-        Assert.That(page, Does.Not.Contain("Your plan: <strong>"), "the current plan is a card, not a line above them");
+        Assert.That(page, Does.Not.Contain("Your plan is <strong>"), "the current plan is a card, not a line above them");
     }
 
     [Test]
@@ -137,10 +137,10 @@ public class UpgradePageTests
         Assert.That(html, Does.Contain("Change your plan from <strong>Free</strong> to"));
         Assert.That(html, Does.Contain("<h2>Veterans</h2>"));
         Assert.That(html, Does.Contain("How would you like to pay?"));
-        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="1" checked> $5 / month"""),
+        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="1" checked /> $5 / month"""),
             "the shortest term, chosen");
-        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="12"> $50 / year"""));
-        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="24"> $90 / 2 years"""));
+        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="12" /> $50 / year"""));
+        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="24" /> $90 / 2 years"""));
     }
 
     [Test]
@@ -151,7 +151,7 @@ public class UpgradePageTests
         var html = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=24")).Content.ReadAsStringAsync();
 
         Assert.That(html, Does.Contain("<p class=\"price\">$90 / 2 years</p>"));
-        Assert.That(html, Does.Contain("""<input type="hidden" name="months" value="24">"""));
+        Assert.That(html, Does.Contain("""<input type="hidden" name="months" value="24" />"""));
         Assert.That(html, Does.Not.Contain("$50 / year"), "only the term chosen");
     }
 
@@ -197,8 +197,8 @@ public class UpgradePageTests
 
         var html = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=12")).Content.ReadAsStringAsync();
 
-        Assert.That(html, Does.Contain("Test checkout"));
-        Assert.That(html, Does.Contain("no payment is taken"));
+        Assert.That(html, Does.Contain("This is a test checkout."));
+        Assert.That(html, Does.Contain("No payment is taken."));
         Assert.That(html, Does.Contain("Complete purchase"));
         Assert.That(html, Does.Contain("Card number"));
         var form = Regex.Match(html, "<form method=\"post\" action=\"/upgrade/checkout\".*?</form>", RegexOptions.Singleline).Value;

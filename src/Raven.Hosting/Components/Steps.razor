@@ -1,0 +1,19 @@
+<ol class="steps" aria-label="Steps">
+    @for (var i = 0; i < Names.Length; i++)
+    {
+        if (i == Current)
+        {
+            <li aria-current="step">@Names[i]</li>
+        }
+        else
+        {
+            <li class="@(i < Current ? "done" : null)">@Names[i]</li>
+        }
+    }
+</ol>
+
+@code {
+    private static readonly string[] Names = ["Choose", "Confirm", "Checkout", "Done"];
+
+    [Parameter] public int Current { get; set; }
+}
