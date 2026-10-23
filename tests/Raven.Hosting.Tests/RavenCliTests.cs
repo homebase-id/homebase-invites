@@ -409,7 +409,7 @@ public class RavenCliTests
 
         var plan = result.Json<Plan>();
         Assert.That(plan with { CreatedAt = 0, UpdatedAt = 0 }, Is.EqualTo(new Plan("cli-gold", "Gold", "A small plan",
-            5368709120, false, true, [new(1, 200), new(12, 1950)], -1, 0, 0)));
+            5368709120, false, false, 0, true, [new(1, 200), new(12, 1950)], -1, 0, 0)));
     }
 
     [Test]

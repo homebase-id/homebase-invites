@@ -9,6 +9,8 @@
         <li>@Plan.Storage of storage</li>
     }
     <li>@(Plan.PublicWebPresence ? "A public home page" : "No public home page")</li>
+    <li>@(Plan.PublicEmail ? "A public email address" : "No public email address")</li>
+    <li>@(Plan.EmailAliases switch { 0 => "No email aliases", 1 => "1 email alias", var n => $"{n} email aliases" })</li>
 </ul>
 @if (ShowPrices && Plan.Prices.Count > 0)
 {

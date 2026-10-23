@@ -61,7 +61,7 @@ public class PlanApiTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         var created = (await response.Content.ReadFromJsonAsync<Plan>())!;
         Assert.That(created with { CreatedAt = 0, UpdatedAt = 0 }, Is.EqualTo(new Plan("Gold", "Gold plan", "Shiny",
-            5368709120, false, true, [new(1, 200), new(12, 2000)], 1, 0, 0)), "prices shortest term first");
+            5368709120, false, false, 0, true, [new(1, 200), new(12, 2000)], 1, 0, 0)), "prices shortest term first");
         Assert.That(created.Storage, Is.EqualTo("5 GB"));
         Assert.That(await _admin.GetFromJsonAsync<Plan>(Root + "/gold"), Is.EqualTo(created));
 

@@ -119,9 +119,9 @@ public class PlanPriceTests
 
             Assert.That(plans, Is.EqualTo(new[]
             {
-                new Plan("free", "Free", "", 64424509440, true, false, [], 0, 10, 20),
-                new Plan("personal", "Personal", "", 107374182400, true, true, [], 1, 10, 20),
-                new Plan("pro", "Pro", "Everything", 1099511627776, true, true, [new(1, 1000), new(12, 10000)], 3, 10, 20),
+                new Plan("free", "Free", "", 64424509440, true, false, 0, false, [], 0, 10, 20),
+                new Plan("personal", "Personal", "", 107374182400, true, false, 0, true, [], 1, 10, 20),
+                new Plan("pro", "Pro", "Everything", 1099511627776, true, false, 0, true, [new(1, 1000), new(12, 10000)], 3, 10, 20),
             }), "every plan as it was, prices included");
 
             await using var check = new SqliteConnection($"Data Source={path}");
@@ -202,5 +202,5 @@ public class PlanPriceTests
         }
     }
 
-    private static Plan Plan(PlanPrice[] prices) => new("p", "P", "", 1, true, true, prices, 0, 0, 0);
+    private static Plan Plan(PlanPrice[] prices) => new("p", "P", "", 1, true, false, 0, true, prices, 0, 0, 0);
 }
