@@ -9,7 +9,7 @@
 </head>
 <body>
 <header class="site-header">
-    <div class="frame">
+    <div class="@(Wide ? "frame wide" : "frame")">
         <a class="wordmark" href="@UpgradePage.Root">Raven Hosting</a>
         <h1>@Title</h1>
         @if (Step != null)
@@ -18,7 +18,7 @@
         }
     </div>
 </header>
-<main class="frame">
+<main class="@(Wide ? "frame wide" : "frame")">
     @ChildContent
 </main>
 </body>
@@ -31,4 +31,7 @@
     [Parameter] public int? Step { get; set; }
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Room for plans side by side on a desktop</summary>
+    [Parameter] public bool Wide { get; set; }
 }

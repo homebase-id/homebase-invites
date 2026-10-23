@@ -44,6 +44,11 @@ HOSTING PLANS  (create key)
       Lists the plans as a table: id, name, storage, public page, for sale, prices and sort order.
         --json              print the service's JSON instead of the table (the table needs jq)
 
+  plan <plan id> [--json]
+      Shows everything about one plan: name, description, storage, public page, for sale, each
+      price, sort order, and when it was made and last changed. Any case finds it.
+        --json              print the service's JSON instead (the readable form needs jq)
+
   plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false
               [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>]
               [--description <text>]
@@ -275,7 +280,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  plans|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
+  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
   validate|use|undo) need RAVEN_HOSTING_SIGNUP_KEY; key="$RAVEN_HOSTING_SIGNUP_KEY" ;;
 esac
 
@@ -354,6 +359,31 @@ INTRO
       | if ($rows | length) == 0 then "(no plans; make one with ./raven.sh plan-create)"
         else ($table[] | [range(0; length) as $i | .[$i] | pad($widths[$i])] | join("  ") | sub(" +$"; ""))
         end'
+    ;;
+  plan)
+    plan_usage="usage: ./raven.sh plan <plan id> [--json]"
+    check_plan_id "${1:-}" "$plan_usage"
+    as_json=false
+    case "${2:-}" in
+      "") ;;
+      --json) as_json=true ;;
+      *) die "$plan_usage" ;;
+    esac
+    base="$PLANS" render "$as_json" "/$1" '
+      def when: . / 1000 | floor | strftime("%Y-%m-%d %H:%M UTC");
+      def yes: if . then "yes" else "no" end;
+      "\(.name) (\(.id))",
+      (if .description == "" then "(no description)" else .description end),
+      "",
+      "  storage       \(.storage) (\(.quotaBytes) bytes)",
+      "  public page   \(.publicWebPresence | yes)",
+      "  for sale      \(.forSale | yes)",
+      "  prices        " + (if (.prices | length) == 0 then "none"
+                            else [.prices[] | .text + (if .months == 1 or .months == 12 then "" else " (\(.months) months)" end)]
+                                 | join("\n                ") end),
+      "  sort order    \(.sortOrder)",
+      "  created       \(.createdAt | when)",
+      "  changed       \(.updatedAt | when)"'
     ;;
   plan-create)
     plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>] [--description <text>]  (see ./raven.sh help)"

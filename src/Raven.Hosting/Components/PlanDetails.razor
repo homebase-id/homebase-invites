@@ -1,5 +1,5 @@
 @* The description, what the plan gives, and what each term costs *@
-@if (Plan.Description != "")
+@if (ShowDescription && Plan.Description != "")
 {
     <p>@Plan.Description</p>
 }
@@ -22,6 +22,7 @@
 
 @code {
     [Parameter, EditorRequired] public Plan Plan { get; set; } = null!;
+    [Parameter] public bool ShowDescription { get; set; } = true;
     [Parameter] public bool ShowStorage { get; set; } = true;
     [Parameter] public bool ShowPrices { get; set; } = true;
 }
