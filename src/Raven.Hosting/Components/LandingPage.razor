@@ -45,7 +45,8 @@
                 }
                 @foreach (var plan in Plans)
                 {
-                    <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, Now?.PlanId)" Fit="@(Now == null ? null : PlanFit.Of(plan, Now))">
+                    <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, Now?.PlanId)" Fit="@(Now == null ? null : PlanFit.Of(plan, Now))"
+                              IsRecommended="UpgradePage.SamePlan(plan.Id, Recommended?.Id)">
                         <Action>
                             @if (Identity == null)
                             {
@@ -82,6 +83,8 @@
 
     /// <summary>The plans for sale</summary>
     [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    private Plan? Recommended => PlanRecommendation.For(Plans, Now);
 
     private readonly RenderFragment FreeAction = @<a class="button" href="@SitePages.DefaultSignupUrl" data-signup>Create a free identity</a>;
 }

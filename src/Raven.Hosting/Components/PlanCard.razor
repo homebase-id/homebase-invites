@@ -1,6 +1,6 @@
 @* One plan, as a card in a list of plans. Every card has the same parts in the same order (storage, name,
    description, what it gives, prices, then the choice), so on a desktop they line up across plans *@
-<li class="@(IsCurrent ? "card current" : "card")">
+<li class="@Classes">
     <p class="storage">@Plan.Storage</p>
     <h2>@Plan.Name</h2>
     <p class="description">@Plan.Description</p>
@@ -38,6 +38,9 @@
     [Parameter, EditorRequired] public Plan Plan { get; set; } = null!;
     [Parameter] public bool IsCurrent { get; set; }
 
+    /// <summary>The plan to suggest: its card is outlined and labelled "Recommended"</summary>
+    [Parameter] public bool IsRecommended { get; set; }
+
     /// <summary>The plan a new identity starts on: it says "Free" where the prices go</summary>
     [Parameter] public bool IsFree { get; set; }
 
@@ -46,4 +49,6 @@
 
     /// <summary>The button, when it is not the owner's plan and they can choose it; none leaves the place empty</summary>
     [Parameter] public RenderFragment? Action { get; set; }
+
+    private string Classes => "card" + (IsCurrent ? " current" : "") + (IsRecommended ? " recommended" : "");
 }
