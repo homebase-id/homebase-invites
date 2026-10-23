@@ -257,9 +257,9 @@ Where an owner gets a bigger plan. Their owner console sends them to
    identity answering `aes-cbc` is refused as a downgrade). A token that opens is the proof the owner of that
    identity is here. The session is a data-protected cookie for the whole site, for an hour. It also keeps the
    display name on the identity's public profile card (`GET https://<identity>/pub/profile`, odin-core), fetched once
-   here and best effort: none when the card has no name of its own, there is no card, or it cannot be reached. Pages
-   show the owner as their public photo (`https://<identity>/pub/image`, loaded by the browser; the identity serves a
-   placeholder when there is none) beside that name, with the identity under it, or the identity alone.
+   here and best effort: none when the card has no name of its own, there is no card, or it cannot be reached. The
+   header shows the owner as their public photo (`https://<identity>/pub/image`, loaded by the browser; the identity
+   serves a placeholder when there is none) beside that name, with the identity under it, or the identity alone.
 3. **Choose** (`/upgrade`): the plans marked for sale as cards, by `sortOrder`: name, description, storage
    (`1 TB of storage`), then each feature, ticked with a line on what it is when the plan has it and dashed and
    faded when not (a public home page, a public email address, email aliases), and its prices, each term with what it saves on paying
