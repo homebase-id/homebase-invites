@@ -16,7 +16,8 @@
         <ul class="plans">
             @foreach (var plan in Plans)
             {
-                <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, Now?.PlanId)" Fit="PlanFit.Of(plan, Now)">
+                <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, Now?.PlanId)" Fit="PlanFit.Of(plan, Now)"
+                          IsRecommended="UpgradePage.SamePlan(plan.Id, Recommended?.Id)">
                     <Action>
                         <a class="button" href="@UpgradePage.ConfirmUrl(plan.Id)">Choose @plan.Name</a>
                     </Action>
@@ -33,4 +34,6 @@
     [Parameter] public IdentityOnHost? Now { get; set; }
     [Parameter] public string CurrentPlanName { get; set; } = "";
     [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    private Plan? Recommended => PlanRecommendation.For(Plans, Now);
 }

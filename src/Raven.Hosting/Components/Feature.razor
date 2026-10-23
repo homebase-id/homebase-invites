@@ -1,0 +1,16 @@
+@* One feature in a plan's list: ticked with what it is under it when the plan has it, dashed and faded when it does
+   not, saying so to a screen reader *@
+@if (Has)
+{
+    <li class="has">@Name<span class="explain">@Explain</span></li>
+}
+else
+{
+    <li class="lacks"><span class="visually-hidden">Not included: </span>@Name</li>
+}
+
+@code {
+    [Parameter] public bool Has { get; set; }
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+    [Parameter] public string Explain { get; set; } = "";
+}

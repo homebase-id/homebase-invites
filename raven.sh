@@ -50,14 +50,14 @@ HOSTING PLANS  (create key)
 
   plan <plan id> [--json]
       Shows everything about one plan: name, description, storage, public page, public email,
-      email aliases, for sale, each price, sort order, and when it was made and last changed. Any
-      case finds it.
+      email aliases, for sale, recommended, each price, sort order, and when it was made and last
+      changed. Any case finds it.
         --json              print the service's JSON instead (the readable form needs jq)
 
   plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false
               [--public-email true|false] [--email-aliases <n>]
               [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>]
-              [--description <text>]
+              [--recommended true|false] [--description <text>]
       Makes a new plan and prints it.
         --id <plan id>                 required: letters, digits, '.', '_' and '-', e.g. veterans.
                                        Any case finds it; it cannot be changed later
@@ -77,11 +77,14 @@ HOSTING PLANS  (create key)
         --for-sale true|false          optional, false by default: whether owners can buy it on
                                        the upgrade page. A plan for sale needs a price
         --sort-order <n>               optional, 0 by default: plans are listed by it, then by id
+        --recommended true|false       optional, false by default: mark its card "Recommended" for
+                                       visitors. Someone signed in is recommended the next size up
+                                       from what they have instead
         --description <text>           optional: a line shown on its card
 
   plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false]
             [--public-email true|false] [--email-aliases <n>] [--for-sale true|false]
-            [--sort-order <n>] [--description <text>]
+            [--sort-order <n>] [--recommended true|false] [--description <text>]
       Changes only what you give. Identities already on the plan keep what they were given; the
       change applies to the next signup or purchase. To retire a plan, use --for-sale false.
       Prices are changed with plan-price.
@@ -241,11 +244,12 @@ plan_fields() { # usage [option value]...; the plan options as JSON fields, in t
       --email-aliases)
         [[ "${2:-}" =~ ^[0-9]+$ ]] || die "--email-aliases must be a number, 0 or more, e.g. --email-aliases 5"
         fields+=("\"emailAliases\":$((10#$2))"); shift 2 ;;
-      --public-web-presence|--public-email|--for-sale)
+      --public-web-presence|--public-email|--for-sale|--recommended)
         [[ "${2:-}" =~ ^(true|false)$ ]] || die "$1 must be true or false"
         case "$1" in
           --public-web-presence) name=publicWebPresence ;;
           --public-email) name=publicEmail ;;
+          --recommended) name=recommended ;;
           *) name=forSale ;;
         esac
         fields+=("\"$name\":$2"); shift 2 ;;
@@ -407,6 +411,7 @@ INTRO
       "  public email  \(.publicEmail | yes)",
       "  email aliases \(.emailAliases)",
       "  for sale      \(.forSale | yes)",
+      "  recommended   \(.recommended | yes)",
       "  prices        " + (if (.prices | length) == 0 then "none"
                             else [.prices[] | .text + (if .months == 1 or .months == 12 then "" else " (\(.months) months)" end)]
                                  | join("\n                ") end),
@@ -415,7 +420,7 @@ INTRO
       "  changed       \(.updatedAt | when)"'
     ;;
   plan-create)
-    plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--public-email true|false] [--email-aliases <n>] [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>] [--description <text>]  (see ./raven.sh help)"
+    plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--public-email true|false] [--email-aliases <n>] [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>] [--recommended true|false] [--description <text>]  (see ./raven.sh help)"
     plan_id=""; rest=(); prices=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -437,7 +442,7 @@ INTRO
     base="$PLANS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
     ;;
   plan-edit)
-    plan_edit_usage="usage: ./raven.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--public-email true|false] [--email-aliases <n>] [--for-sale true|false] [--sort-order <n>] [--description <text>]  (prices: plan-price)"
+    plan_edit_usage="usage: ./raven.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--public-email true|false] [--email-aliases <n>] [--for-sale true|false] [--sort-order <n>] [--recommended true|false] [--description <text>]  (prices: plan-price)"
     plan_id="${1:-}"
     check_plan_id "$plan_id" "$plan_edit_usage"
     shift

@@ -1,4 +1,5 @@
-@* The description, what the plan gives, and what each term costs *@
+@* The description, what the plan gives, and what each term costs. Every feature is listed, ticked when the plan has
+   it and dashed when it does not, so what a bigger plan adds stands out; what a feature is, under it *@
 @if (ShowDescription && Plan.Description != "")
 {
     <p>@Plan.Description</p>
@@ -6,11 +7,14 @@
 <ul class="gives">
     @if (ShowStorage)
     {
-        <li>@Plan.Storage of storage</li>
+        <li class="has">@Plan.Storage of storage</li>
     }
-    <li>@(Plan.PublicWebPresence ? "A public home page" : "No public home page")</li>
-    <li>@(Plan.PublicEmail ? "A public email address" : "No public email address")</li>
-    <li>@(Plan.EmailAliases switch { 0 => "No email aliases", 1 => "1 email alias", var n => $"{n} email aliases" })</li>
+    <Feature Has="Plan.PublicWebPresence" Name="A public home page"
+             Explain="A page at your domain that anyone can visit, without signing in" />
+    <Feature Has="Plan.PublicEmail" Name="A public email address"
+             Explain="An address at your own domain that anyone can write to" />
+    <Feature Has="Plan.EmailAliases > 0" Name="@Aliases"
+             Explain="More addresses at your domain, all arriving in the same inbox" />
 </ul>
 @if (ShowPrices && Plan.Prices.Count > 0)
 {
@@ -27,4 +31,11 @@
     [Parameter] public bool ShowDescription { get; set; } = true;
     [Parameter] public bool ShowStorage { get; set; } = true;
     [Parameter] public bool ShowPrices { get; set; } = true;
+
+    private string Aliases => Plan.EmailAliases switch
+    {
+        0 => "Email aliases",
+        1 => "1 email alias",
+        var n => $"{n} email aliases",
+    };
 }

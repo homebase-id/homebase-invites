@@ -477,3 +477,23 @@ public record PlanFit(string? Note, bool CanChoose, bool IsMore = false)
         };
     }
 }
+
+/// <summary>
+/// The plan whose card is marked recommended. Someone signed in whose host says their quota is recommended the next
+/// size up: the smallest plan with more room than they have that they can choose, the first listed when two are the
+/// same size; none when no plan has more. Anyone else is recommended the first plan marked so, unless it is theirs.
+/// </summary>
+public static class PlanRecommendation
+{
+    public static Plan? For(IEnumerable<Plan> plans, IdentityOnHost? now)
+    {
+        if (now?.QuotaBytes is { } quota)
+        {
+            return plans
+                .Where(p => p.QuotaBytes > quota && !UpgradePage.SamePlan(p.Id, now.PlanId) && PlanFit.Of(p, now).CanChoose)
+                .OrderBy(p => p.QuotaBytes)
+                .FirstOrDefault();
+        }
+        return plans.FirstOrDefault(p => p.Recommended && !UpgradePage.SamePlan(p.Id, now?.PlanId));
+    }
+}

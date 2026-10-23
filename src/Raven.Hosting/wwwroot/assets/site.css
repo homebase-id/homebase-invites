@@ -295,7 +295,7 @@ main.frame {
 
 .plans {
   margin: 0 0 2rem;
-  padding: 0;
+  padding: 0.75rem 0 0;
   list-style: none;
 }
 
@@ -338,6 +338,37 @@ main.frame {
 .plans .card.current {
   border: 2px solid var(--purple);
   background: var(--purple-tint);
+}
+
+/* The plan to suggest: outlined in green, labelled on its top edge, outside the card's parts so they stay lined up */
+.plans .card.recommended {
+  position: relative;
+  border: 2px solid var(--green);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 150 109 / 0.12);
+}
+
+.plans .card.recommended::before {
+  content: "Recommended";
+  position: absolute;
+  top: -0.75rem;
+  left: 1.25rem;
+  padding: 0.15rem 0.7rem;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2rem;
+}
+
+.plans .card.recommended .choice .button {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.plans .card.recommended .choice .button:hover {
+  border-color: #007a59;
+  background: #007a59;
 }
 
 .frame.wide {
@@ -427,6 +458,53 @@ main.frame {
   padding: 0;
   list-style: none;
   color: var(--muted);
+}
+
+/* Ticked when the plan has it, with what it is under it; dashed and faded when it does not */
+.gives .has,
+.gives .lacks {
+  position: relative;
+  padding: 0.1rem 0 0.1rem 1.4rem;
+}
+
+.gives .has {
+  color: var(--ink);
+}
+
+.gives .has::before,
+.gives .lacks::before {
+  position: absolute;
+  left: 0;
+  font-weight: 700;
+}
+
+.gives .has::before {
+  content: "✓";
+  color: var(--green);
+}
+
+.gives .lacks {
+  opacity: 0.55;
+}
+
+.gives .lacks::before {
+  content: "–";
+}
+
+.explain {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .prices {
