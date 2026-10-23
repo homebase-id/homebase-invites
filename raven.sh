@@ -26,8 +26,10 @@ of times. Codes look like K7QX-M2PD-9FHW; you can type them in any case, with or
 
 FIRST TIME
   setup
-      Asks for the two API keys (hidden as you type) and saves them to $CONFIG.
-      The create key is for create and list; the signup key is for validate, use and undo.
+      Asks for the service's API keys, checks each one with the service, and saves them to
+      $CONFIG (only you can read it). The keys are not passwords you make up: they are in
+      the Hetzner vault in DevOps, under secrets.raven_hosting. Setup says which is which.
+      Run it again to change a key; Enter keeps the one already saved.
 
 CHECK THE SERVICE
   ping
@@ -214,6 +216,13 @@ call() { # method path [body]; sends $key, to $base (the codes API unless set)
   curl "${args[@]}" "${base:-$API}$path"
 }
 
+# The HTTP status the service answers a key with: 200 it is the right key, 401 it is not, 000 no answer
+key_check() { # key method url [body]
+  local args=(-s -o /dev/null -w '%{http_code}' -X "$2" -H "Odin-Api-Key: $1")
+  [[ -n "${4:-}" ]] && args+=(-H 'Content-Type: application/json' -d "$4")
+  curl "${args[@]}" "$3" || true
+}
+
 code_body() { printf '{"code":%s}' "$(json_string "$1")"; }
 
 render() { # as_json path jq-program; GETs path and prints the answer through jq, or as is with --json or no jq
@@ -245,11 +254,58 @@ esac
 
 case "$cmd" in
   setup)
-    read -rsp "Create key: " create; echo
-    read -rsp "Signup key: " signup; echo
+    cat <<INTRO
+raven.sh needs the service's API keys to talk to Raven Hosting at $URL.
+
+They are not passwords you make up: they were made when the service was set up, and are kept in
+the Hetzner vault in the DevOps repo. To see them (needs the vault password):
+  cd DevOps/hetzner/ansible
+  ansible-vault view ansible-vault.yml | grep -A2 raven_hosting
+If you don't have the vault password, ask whoever runs the deploys.
+
+Paste each key and press Enter. What you type is not shown.
+
+INTRO
+    saved_create="${RAVEN_HOSTING_CREATE_KEY:-}"; saved_signup="${RAVEN_HOSTING_SIGNUP_KEY:-}"
+
+    echo "1. The create key (secrets.raven_hosting.create_api_key) - you need this one."
+    echo "   For managing the service: plans, codes, stats and grants."
+    [[ -n "$saved_create" ]] && echo "   One is saved already; press Enter to keep it."
+    read -rsp "   Create key: " create; echo
+    create="${create:-$saved_create}"
+    [[ -n "$create" ]] || die "   No create key given; nothing changed."
+    case "$(key_check "$create" GET "$PLANS/")" in
+      200) echo "   OK: the service accepted it." ;;
+      401) die "   The service refused it: that is not the create key." \
+               "   Check you copied create_api_key (not signup_api_key), all of it. Nothing changed." ;;
+      *)   echo "   Could not check it: the service did not answer. Saving it anyway." ;;
+    esac
+    echo
+
+    echo "2. The signup key (secrets.raven_hosting.signup_api_key) - optional."
+    echo "   Only for testing a code the way a signup does: validate, use and undo."
+    echo "   Most people don't need it; press Enter to skip."
+    [[ -n "$saved_signup" ]] && echo "   One is saved already; press Enter to keep it."
+    read -rsp "   Signup key: " signup; echo
+    signup="${signup:-$saved_signup}"
+    if [[ -n "$signup" ]]; then
+      case "$(key_check "$signup" POST "$API/validate" '{"code":"0000-0000-0000"}')" in
+        200) echo "   OK: the service accepted it." ;;
+        401) die "   The service refused it: that is not the signup key." \
+                 "   Check you copied signup_api_key (not create_api_key), all of it. Nothing changed." ;;
+        *)   echo "   Could not check it: the service did not answer. Saving it anyway." ;;
+      esac
+    else
+      echo "   Skipped."
+    fi
+    echo
+
     umask 077
-    printf 'RAVEN_HOSTING_CREATE_KEY=%q\nRAVEN_HOSTING_SIGNUP_KEY=%q\n' "$create" "$signup" > "$CONFIG"
-    echo "Saved to $CONFIG (readable only by you)"
+    {
+      printf 'RAVEN_HOSTING_CREATE_KEY=%q\n' "$create"
+      if [[ -n "$signup" ]]; then printf 'RAVEN_HOSTING_SIGNUP_KEY=%q\n' "$signup"; fi
+    } > "$CONFIG"
+    echo "Saved to $CONFIG (only you can read it). Try: ./raven.sh plans"
     ;;
   ping)
     curl -sS -w '\n[%{http_code}]\n' "$URL/ping"

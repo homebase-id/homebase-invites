@@ -80,13 +80,80 @@ public class RavenCliTests
     [Test]
     public async Task SetupSavesTheKeysForOnlyTheUserToRead()
     {
-        var result = await RunAsync(new Options(WithKeys: false, Stdin: "the-create-key\nthe-signup-key\n"), "setup");
+        var result = await RunAsync(new Options(WithKeys: false, Stdin: $"{CreateKey}\n{SignupKey}\n"), "setup");
 
         Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
-        var config = Path.Combine(_home, ".raven-hosting");
-        Assert.That(await File.ReadAllTextAsync(config),
-            Is.EqualTo("RAVEN_HOSTING_CREATE_KEY=the-create-key\nRAVEN_HOSTING_SIGNUP_KEY=the-signup-key\n"));
-        Assert.That(File.GetUnixFileMode(config), Is.EqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite));
+        Assert.That(await File.ReadAllTextAsync(ConfigPath),
+            Is.EqualTo($"RAVEN_HOSTING_CREATE_KEY={CreateKey}\nRAVEN_HOSTING_SIGNUP_KEY={SignupKey}\n"));
+        Assert.That(File.GetUnixFileMode(ConfigPath), Is.EqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite));
+        Assert.That(result.Output, Does.Contain("Saved to"));
+    }
+
+    [Test]
+    public async Task SetupSaysWhatTheKeysAreAndWhereToFindThem()
+    {
+        var result = await RunAsync(new Options(WithKeys: false, Stdin: $"{CreateKey}\n\n"), "setup");
+
+        Assert.That(result.Output, Does.Contain("not passwords you make up"));
+        Assert.That(result.Output, Does.Contain("ansible-vault view ansible-vault.yml | grep -A2 raven_hosting"));
+        Assert.That(result.Output, Does.Contain("secrets.raven_hosting.create_api_key"));
+        Assert.That(result.Output, Does.Contain("secrets.raven_hosting.signup_api_key"));
+        Assert.That(result.Output, Does.Contain("OK: the service accepted it."));
+    }
+
+    [Test]
+    public async Task SetupSkipsTheSignupKey()
+    {
+        var result = await RunAsync(new Options(WithKeys: false, Stdin: $"{CreateKey}\n\n"), "setup");
+
+        Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
+        Assert.That(result.Output, Does.Contain("Skipped."));
+        Assert.That(await File.ReadAllTextAsync(ConfigPath), Is.EqualTo($"RAVEN_HOSTING_CREATE_KEY={CreateKey}\n"));
+    }
+
+    [TestCase("wrong-key", "not the create key", TestName = "SetupRefusesAWrongCreateKey")]
+    [TestCase(SignupKey, "not the create key", TestName = "SetupRefusesTheSignupKeyAsTheCreateKey")]
+    [TestCase("", "No create key given", TestName = "SetupNeedsACreateKey")]
+    public async Task SetupRefusesABadCreateKey(string typed, string message)
+    {
+        var result = await RunAsync(new Options(WithKeys: false, Stdin: typed + "\n"), "setup");
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Error, Does.Contain(message));
+        Assert.That(File.Exists(ConfigPath), Is.False, "nothing saved");
+    }
+
+    [Test]
+    public async Task SetupRefusesTheCreateKeyAsTheSignupKey()
+    {
+        var result = await RunAsync(new Options(WithKeys: false, Stdin: $"{CreateKey}\n{CreateKey}\n"), "setup");
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Error, Does.Contain("not the signup key"));
+        Assert.That(File.Exists(ConfigPath), Is.False, "nothing saved");
+    }
+
+    [Test]
+    public async Task SetupKeepsTheSavedKeysOnEnter()
+    {
+        await RunAsync(new Options(WithKeys: false, Stdin: $"{CreateKey}\n{SignupKey}\n"), "setup");
+        var saved = await File.ReadAllTextAsync(ConfigPath);
+
+        var again = await RunAsync(new Options(WithKeys: false, Stdin: "\n\n"), "setup");
+
+        Assert.That(again.ExitCode, Is.EqualTo(0), again.Error);
+        Assert.That(again.Output, Does.Contain("One is saved already; press Enter to keep it."));
+        Assert.That(await File.ReadAllTextAsync(ConfigPath), Is.EqualTo(saved));
+    }
+
+    [Test]
+    public async Task SetupSavesTheKeysWhenTheServiceCannotBeAsked()
+    {
+        var result = await RunAsync(new Options(WithKeys: false, Stdin: "some-key\n\n", Url: "http://127.0.0.1:9"), "setup");
+
+        Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
+        Assert.That(result.Output, Does.Contain("Could not check it"));
+        Assert.That(await File.ReadAllTextAsync(ConfigPath), Is.EqualTo("RAVEN_HOSTING_CREATE_KEY=some-key\n"));
     }
 
     [Test]
@@ -507,7 +574,13 @@ public class RavenCliTests
     /// <param name="WithKeys">Pass the right keys in the environment</param>
     /// <param name="Stdin">What to type</param>
     /// <param name="CreateKey">A create key of its own, instead of the right one</param>
-    private record Options(bool WithKeys = true, string? Stdin = null, string? CreateKey = null);
+    /// <param name="Url">The service's URL, instead of the test server's</param>
+    private record Options(bool WithKeys = true, string? Stdin = null, string? CreateKey = null, string? Url = null);
+
+    private const string CreateKey = InvitationCodeServer.CreateKey;
+    private const string SignupKey = InvitationCodeServer.SignupKey;
+
+    private string ConfigPath => Path.Combine(_home, ".raven-hosting");
 
     private Task<CliResult> RunAsync(params string[] arguments) => RunAsync(new Options(), arguments);
 
@@ -526,7 +599,7 @@ public class RavenCliTests
         }
 
         start.Environment["HOME"] = _home;
-        start.Environment["RAVEN_HOSTING_URL"] = _url;
+        start.Environment["RAVEN_HOSTING_URL"] = options.Url ?? _url;
         start.Environment.Remove("RAVEN_HOSTING_CREATE_KEY");
         start.Environment.Remove("RAVEN_HOSTING_SIGNUP_KEY");
         if (options.WithKeys)
