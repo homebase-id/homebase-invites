@@ -1,6 +1,6 @@
 @* Step 1: what the owner has now, then the plans for sale, each against it *@
 <SitePage Title="Choose a plan" Step="0" Wide="true">
-    <p class="who">Signed in as <strong>@Identity</strong>.</p>
+    <SignedInAs Identity="@Identity" Name="@Name" />
 
     @if (Now != null)
     {
@@ -29,6 +29,9 @@
 
 @code {
     [Parameter] public string Identity { get; set; } = "";
+
+    /// <summary>The name on their public profile card; null when it has none</summary>
+    [Parameter] public string? Name { get; set; }
 
     /// <summary>What the owner has now, as their host says</summary>
     [Parameter] public IdentityOnHost? Now { get; set; }

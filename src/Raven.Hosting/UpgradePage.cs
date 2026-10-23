@@ -10,8 +10,8 @@ using Raven.Hosting.Components;
 namespace Raven.Hosting;
 
 /// <summary>
-/// Who is signed in to the upgrade page: an identity whose owner proved it with YouAuth, and the host it was last
-/// seen on. In a data-protected, time-limited cookie for the whole site, so the landing page knows them too.
+/// Who is signed in to the upgrade page: an identity whose owner proved it with YouAuth, the host it was last seen
+/// on, and the name on its public profile card when it signed in. In a data-protected, time-limited cookie for the whole site, so the landing page knows them too.
 /// </summary>
 public class UpgradeSession(IDataProtectionProvider dataProtection)
 {
@@ -21,7 +21,7 @@ public class UpgradeSession(IDataProtectionProvider dataProtection)
     private readonly ITimeLimitedDataProtector _protector =
         dataProtection.CreateProtector("upgrade-session").ToTimeLimitedDataProtector();
 
-    public record Data(string Identity, string? Host);
+    public record Data(string Identity, string? Host, string? Name = null);
 
     /// <summary>The signed-in identity; null when there is no cookie, or it expired or was tampered with</summary>
     public Data? Read(HttpContext context)
@@ -155,6 +155,7 @@ public static class UpgradePage
                 return Show<ChoosePage>(new
                 {
                     Identity = located.SignedIn!.Identity,
+                    Name = located.SignedIn.Name,
                     Now = located.Now,
                     CurrentPlanName = await PlanNameAsync(planStore, located.PlanId),
                     Plans = (await planStore.ListAsync()).Where(IsForSale).ToList(),
@@ -180,7 +181,7 @@ public static class UpgradePage
         page.MapGet("/youauth-callback", async (HttpContext context, [FromQuery] string? state,
             [FromQuery(Name = "public_key")] string? publicKey, [FromQuery] string? salt, [FromQuery] string? error,
             [FromQuery(Name = "error_description")] string? errorDescription, UpgradeOptions options,
-            UpgradeSession session, YouAuthLogin login) =>
+            UpgradeSession session, YouAuthLogin login, PublicProfiles profiles) =>
         {
             if (!options.Enabled)
             {
@@ -193,7 +194,8 @@ public static class UpgradePage
                 return Message(StatusCodes.Status400BadRequest, "Not signed in", result.Error!);
             }
 
-            session.Write(context, new UpgradeSession.Data(result.Identity, result.HostHint));
+            session.Write(context, new UpgradeSession.Data(result.Identity, result.HostHint,
+                await profiles.NameAsync(result.Identity)));
             var next = context.Request.Cookies[NextPlanCookie];
             context.Response.Cookies.Delete(NextPlanCookie, NextPlanCookieOptions());
             return Results.Redirect(PlanIds.IsValid(next) ? ConfirmUrl(next!) : Root);

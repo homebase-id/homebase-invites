@@ -47,6 +47,7 @@ builder.Services.AddDataProtection().SetApplicationName("raven-hosting");
 builder.Services.Configure<KeyManagementOptions>(options => options.XmlRepository = loginStore);
 builder.Services.AddSingleton<YouAuthLogin>();
 builder.Services.AddSingleton<UpgradeSession>();
+builder.Services.AddSingleton<PublicProfiles>();
 builder.Services.AddHttpClient(YouAuthLogin.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
 // The upgrade page is Razor components (Components/), rendered on the server from its endpoints
 builder.Services.AddRazorComponents();

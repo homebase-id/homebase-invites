@@ -49,6 +49,7 @@ public static class SitePages
             if (signedIn != null)
             {
                 parameters["Identity"] = signedIn.Identity;
+                parameters["Name"] = signedIn.Name;
                 var located = await UpgradePage.LocateAsync(context, signedIn, session, plans);
                 if (located.Error == null)
                 {

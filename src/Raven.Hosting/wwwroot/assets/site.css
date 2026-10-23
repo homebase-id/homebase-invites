@@ -287,6 +287,38 @@ main.frame {
   color: var(--ink);
 }
 
+/* Who is signed in: their public photo, then their name with the identity under it */
+.signed-in {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 1.5rem;
+}
+
+.signed-in .avatar {
+  flex: none;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--line);
+}
+
+.signed-in p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.signed-in strong {
+  color: var(--ink);
+}
+
+.signed-in .identity {
+  display: block;
+  font-size: 0.85rem;
+}
+
 /*
  * Plans. On a phone or tablet, rows: the storage figure on the left, the rest beside it. On a desktop, columns side
  * by side, their parts lined up across plans (subgrid), so they compare at a glance. Every card has the same six
