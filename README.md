@@ -1,7 +1,8 @@
 # raven-hosting
 
 Raven Hosting's service for Homebase identities: invitation codes for signups, the hosting plans, plan grants,
-and the upgrade page where owners get a bigger plan.
+the upgrade page where owners get a bigger plan, and the site around it at https://ravenhosting.cloud (the plans
+and their prices, the terms, the privacy policy and the report form).
 
 The identity hosts (odin-core) call it at signup to check a code and take a use; who signed up with a code
 is kept on the new identity's registration, not here. The hosts have no plans of their own (odin-core #1994):
@@ -35,7 +36,7 @@ the service on a real port. The script tests need `jq`: without it they are skip
 `.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
 `ghcr.io/homebase-id/raven-hosting-internal:<branch>`, then asks the ansible controller to deploy it
 (`deploy raven-hosting aux raven-hosting-internal <tag>`) to blackbird-aux, behind Caddy at
-https://invites.ravenhosting.cloud, the same way homebase-social-sync deploys. The controller only deploys what the
+https://ravenhosting.cloud (the site) and https://invites.ravenhosting.cloud (the APIs), the same way homebase-social-sync deploys. The controller only deploys what the
 DevOps repo allowlists (`odin-deploy.sh`, `run-playbook.sh`), so that has to be set up first.
 
 The container listens on 8080 and keeps its database in `/data`: mount a volume there.
@@ -203,6 +204,25 @@ curl -X POST https://<service>/api/v1/plans/grants/ \
   -d '{"identity":"frodo.demo.rocks","planId":"veterans","source":"admin"}'
 ```
 
+## Site
+
+The public pages, in `SitePages.cs`, on the same Razor components and stylesheet as the upgrade page:
+
+- **`/`**: what hosting costs. The free plan (Id `free`, `SitePages.FreePlanId`) first, with **Create a free
+  identity**, then the plans for sale with their prices. A visitor gets **Sign in to choose** on each; someone
+  signed in gets **Choose** and sees their own plan marked, as on `/upgrade`. If their host cannot be asked just
+  then, the page shows without it.
+- **`/sign-in?plan=<id>`**: a box for the identity, sent to `/upgrade?id=<identity>&plan=<id>`, which signs them in
+  (below) and then goes straight to confirming that plan. The plan rides along in a short cookie on `/upgrade`.
+- **`/terms-and-conditions`**, **`/privacy-policy`**: as they were on the old Netlify site (ravenhosting-web).
+- **`/report`**: the report form for content that breaks the terms; `/report/content`, where identity hosts link
+  (`Host:ReportContentUrl`), redirects to it. Reports are kept in the database (`content_reports`) and read with
+  `./raven.sh reports` (`GET /api/v1/reports?sinceDays=<n>`, create key). Nobody is notified of a new one.
+
+**Create a free identity** goes to the visitor's region's sign-up host: the page carries the EU host and
+`wwwroot/assets/signup.js` picks by time zone, then language, in step with odin-js `detectRegion`. Every header
+has **Sign in**, or the identity signed in and **Sign out**, which goes back to `/`.
+
 ## Upgrade page
 
 Where an owner gets a bigger plan. Their owner console sends them to
@@ -218,7 +238,7 @@ Where an owner gets a bigger plan. Their owner console sends them to
 2. **Callback** (`/upgrade/youauth-callback`): the state is taken once; the service derives the exchange secret,
    trades its digest at `https://<identity>/api/owner/v1/youauth/token`, and opens the token (AES-GCM; an
    identity answering `aes-cbc` is refused as a downgrade). A token that opens is the proof the owner of that
-   identity is here. The session is a data-protected cookie on `/upgrade`, for an hour.
+   identity is here. The session is a data-protected cookie for the whole site, for an hour.
 3. **Choose** (`/upgrade`): the plans marked for sale as cards, by `sortOrder`: name, description, storage
    (`1 TB of storage`), whether there is a public home page, and its prices, each term with what it saves on paying
    monthly when it does (`$50 / year save 17%`, against 12 times the monthly price). The identity's plan,
@@ -257,7 +277,7 @@ Security:
 - `id` and `host` are hints anyone can write into a link. The identity is the one the service stored with the
   state and then completed the token exchange with, never `id` or the callback's `identity`; `host` is used only
   if it is a known host, and only to decide which host to ask first.
-- Forms carry an antiforgery token; the session and antiforgery cookies are `Secure`, `HttpOnly`, on `/upgrade`.
+- Forms carry an antiforgery token; the session and antiforgery cookies are `Secure` and `HttpOnly`.
 - The data-protection keys are in the database (`data_protection_keys`), so sessions and logins in progress
   survive a restart. They are not encrypted at rest (the service logs a warning saying so): protect the
   database file.
@@ -274,7 +294,7 @@ Security:
 | `RavenHosting__AccountServiceApiKey` | required with hosts; the plan key, the same on every host (odin-core `Registry__AccountService__ApiKey`). Give it only to Homebase-run hosts |
 | `RavenHosting__GrantRetryIntervalSeconds` | optional, default 60; how often due grants are tried |
 | `RavenHosting__ReconcileIntervalHours` | optional, default 24 |
-| `RavenHosting__PublicDomain` | optional; the service's own public domain, e.g. `invites.ravenhosting.cloud`: its YouAuth client id and where `/upgrade` is. None: the upgrade page is off (404) |
+| `RavenHosting__PublicDomain` | optional; the service's own public domain, e.g. `ravenhosting.cloud`: its YouAuth client id and where the site and `/upgrade` are. None: both are off (404) |
 | `RavenHosting__DisplayName` | optional; what the identity's consent screen calls the service. Defaults to the public domain |
 
 SQLite means **one instance**, and the database file should be backed up.

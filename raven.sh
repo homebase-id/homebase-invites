@@ -16,6 +16,7 @@ URL="${RAVEN_HOSTING_URL:-https://invites.ravenhosting.cloud}"
 API="$URL/api/v1/invitation-codes"
 PLANS="$URL/api/v1/plans"
 GRANTS="$URL/api/v1/plans/grants"
+REPORTS="$URL/api/v1/reports"
 
 usage() {
   cat <<EOF
@@ -147,6 +148,14 @@ GRANT A PLAN  (create key)
 
   retry <grant id>
       Tries a pending or failed grant again now, e.g. once the identity is on a host.
+
+CONTENT REPORTS  (create key)
+  reports [--since <days>] [--json]
+      Prints the reports filed on https://ravenhosting.cloud/report, newest first: who sent it and
+      how to reach them, what and who it is about, what is wrong, where it is, and anything else
+      they wrote. Nobody is told when one comes in: check here.
+        --since <days>      only those from the last <days> days
+        --json              print the service's JSON instead (the readable form needs jq)
 
 TEST A CODE  (signup key; odin-core does these during a real signup)
   validate <code>
@@ -280,7 +289,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
+  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry|reports) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
   validate|use|undo) need RAVEN_HOSTING_SIGNUP_KEY; key="$RAVEN_HOSTING_SIGNUP_KEY" ;;
 esac
 
@@ -557,6 +566,30 @@ INTRO
     done
     [[ " ${fields[*]-} " == *'"identity":'* && " ${fields[*]-} " == *'"planId":'* ]] || die "$grant_usage"
     base="$GRANTS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  reports)
+    reports_usage="usage: ./raven.sh reports [--since <days>] [--json]"
+    qs=""; as_json=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --since) [[ "${2:-}" =~ ^[0-9]+$ ]] || die "--since must be a number of days, e.g. --since 7"
+                 qs="?sinceDays=$2"; shift 2 ;;
+        --json) as_json=true; shift ;;
+        *) die "unknown option: $1" "$reports_usage" ;;
+      esac
+    done
+    base="$REPORTS" render "$as_json" "$qs" '
+      def when: . / 1000 | floor | strftime("%Y-%m-%d %H:%M UTC");
+      if length == 0 then "(no reports)"
+      else [.[] |
+        "#\(.id)  \(.createdAt | when)",
+        "  from       \(.contactInfo)",
+        "  about      \(.contentType), by \(.contentAuthor)",
+        "  problem    \(.violation)",
+        "  where      \(.evidence | gsub("\n"; "\n             "))",
+        (if .additional == "" then empty else "  also       \(.additional | gsub("\n"; "\n             "))" end),
+        ""] | .[:-1] | join("\n")
+      end'
     ;;
   grants)
     grants_usage="usage: ./raven.sh grants [--id <identity>] [--status pending|applied|failed] [--json]"

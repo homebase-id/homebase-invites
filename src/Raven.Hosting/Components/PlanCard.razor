@@ -1,0 +1,41 @@
+@* One plan, as a card in a list of plans. Every card has the same parts in the same order (storage, name,
+   description, what it gives, prices, then the action), so on a desktop they line up across plans *@
+<li class="@(IsCurrent ? "card current" : "card")">
+    <p class="storage">@Plan.Storage</p>
+    <h2>@Plan.Name</h2>
+    <p class="description">@Plan.Description</p>
+    <PlanDetails Plan="Plan" ShowDescription="false" ShowStorage="false" ShowPrices="false" />
+    <ul class="prices">
+        @if (Plan.Prices.Count == 0 && IsFree)
+        {
+            <li>Free</li>
+        }
+        @foreach (var price in Plan.Prices)
+        {
+            <li><PriceLabel Plan="Plan" Price="price" /></li>
+        }
+    </ul>
+    @if (IsCurrent)
+    {
+        <p class="badge">Your plan</p>
+    }
+    else if (Action != null)
+    {
+        @Action
+    }
+    else
+    {
+        <span class="no-action"></span>
+    }
+</li>
+
+@code {
+    [Parameter, EditorRequired] public Plan Plan { get; set; } = null!;
+    [Parameter] public bool IsCurrent { get; set; }
+
+    /// <summary>The plan a new identity starts on: it says "Free" where the prices go</summary>
+    [Parameter] public bool IsFree { get; set; }
+
+    /// <summary>The button, when it is not the owner's plan; none leaves the place empty</summary>
+    [Parameter] public RenderFragment? Action { get; set; }
+}

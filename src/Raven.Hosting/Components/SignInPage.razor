@@ -1,0 +1,32 @@
+@* Who to sign in: their identity, then YouAuth on it (/upgrade?id=), back to the plan they chose, if they chose one *@
+<SitePage Title="Sign in" ShowSignIn="false">
+    <form method="get" action="@UpgradePage.Root" class="card sign-in">
+        @if (Plan != null)
+        {
+            <input type="hidden" name="plan" value="@Plan.Id">
+            <p>Sign in to choose <strong>@Plan.Name</strong>.</p>
+        }
+        <label>
+            Your Homebase identity
+            <input type="text" name="id" required autofocus autocomplete="username" inputmode="url"
+                   autocapitalize="none" spellcheck="false" placeholder="frodo.homebase.id" value="@Identity">
+        </label>
+        @if (Problem != null)
+        {
+            <p class="problem" role="alert">@Problem</p>
+        }
+        <p class="muted">Your Homebase asks you to confirm, then sends you back here.</p>
+        <div class="actions">
+            <button type="submit">Sign in</button>
+            <a class="button secondary" href="/">Back to plans</a>
+        </div>
+    </form>
+    <p class="muted">No identity yet? <a href="@SitePages.DefaultSignupUrl" data-signup>Create a free one</a>.</p>
+</SitePage>
+
+@code {
+    /// <summary>The plan chosen before signing in; null when none was</summary>
+    [Parameter] public Plan? Plan { get; set; }
+    [Parameter] public string? Identity { get; set; }
+    [Parameter] public string? Problem { get; set; }
+}

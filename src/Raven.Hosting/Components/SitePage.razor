@@ -1,37 +1,103 @@
-@* Every upgrade page: Homebase's gradient header with the name, the page's title and the steps, then the page *@
+@* Every page: Homebase's gradient header with the name, who is signed in, the page's title and (in the upgrade) the
+   steps, then the page, then the footer *@
+@inject UpgradeSession Session
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>@Title - Raven Hosting</title>
+<title>@(Title == SiteName ? SiteName : $"{Title} - {SiteName}")</title>
+@if (Description != null)
+{
+    <meta name="description" content="@Description">
+}
+<link rel="icon" href="/assets/raven-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="@SiteAssets.Stylesheet">
+<script src="/assets/signup.js" defer></script>
 </head>
 <body>
-<header class="site-header">
-    <div class="@(Wide ? "frame wide" : "frame")">
-        <a class="wordmark" href="@UpgradePage.Root">Raven Hosting</a>
+<header class="@(Lead != null ? "site-header lead" : "site-header")">
+    <div class="@FrameClass">
+        <div class="topbar">
+            <a class="wordmark" href="/"><img src="/assets/raven-logo.svg" alt="" width="28" height="28">@SiteName</a>
+            <div class="account">
+                @if (_signedIn != null)
+                {
+                    <span class="identity">@_signedIn.Identity</span>
+                    <form method="post" action="@($"{UpgradePage.Root}/sign-out")">
+                        <AntiforgeryField Token="_antiforgery!" />
+                        <button type="submit" class="on-dark">Sign out</button>
+                    </form>
+                }
+                else if (ShowSignIn)
+                {
+                    <a class="button on-dark" href="@SitePages.SignIn">Sign in</a>
+                }
+            </div>
+        </div>
         <h1>@Title</h1>
+        @Lead
         @if (Step != null)
         {
             <Steps Current="Step.Value" />
         }
     </div>
 </header>
-<main class="@(Wide ? "frame wide" : "frame")">
+<main class="@FrameClass">
     @ChildContent
 </main>
+<footer class="site-footer">
+    <div class="@FrameClass">
+        <a href="/terms-and-conditions">Terms &amp; Conditions</a>
+        <a href="/privacy-policy">Privacy Policy</a>
+        <a href="/report">Report content</a>
+        <a href="https://homebase.id">Homebase</a>
+    </div>
+</footer>
 </body>
 </html>
 
 @code {
+    public const string SiteName = "Raven Hosting";
+
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
+
     [Parameter, EditorRequired] public string Title { get; set; } = "";
 
-    /// <summary>Which of the four steps this page is, from 0; null for a page outside them</summary>
+    [Parameter] public string? Description { get; set; }
+
+    /// <summary>Under the title, in the header: the landing page's introduction</summary>
+    [Parameter] public RenderFragment? Lead { get; set; }
+
+    /// <summary>Which of the four upgrade steps this page is, from 0; null for a page outside them</summary>
     [Parameter] public int? Step { get; set; }
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
     /// <summary>Room for plans side by side on a desktop</summary>
     [Parameter] public bool Wide { get; set; }
+
+    /// <summary>Whether the header offers "Sign in" to someone who is not; not on the sign-in page itself</summary>
+    [Parameter] public bool ShowSignIn { get; set; } = true;
+
+    private UpgradeSession.Data? _signedIn;
+    private Microsoft.AspNetCore.Antiforgery.AntiforgeryTokenSet? _antiforgery;
+
+    private string FrameClass => Wide ? "frame wide" : "frame";
+
+    protected override void OnInitialized()
+    {
+        if (HttpContext == null)
+        {
+            return;
+        }
+
+        // A sign-out answers with a redirect, so a page never shows a session it has just ended
+        _signedIn = Session.Read(HttpContext);
+        if (_signedIn != null)
+        {
+            _antiforgery = Antiforgery.GetAndStoreTokens(HttpContext);
+        }
+    }
 }

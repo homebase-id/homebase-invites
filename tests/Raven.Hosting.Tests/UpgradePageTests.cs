@@ -58,11 +58,19 @@ public class UpgradePageTests
         Assert.That(query["public_key"], Is.Not.Empty);
     }
 
-    [TestCase("/upgrade")]
-    [TestCase("/upgrade?id=not%20a%20domain")]
-    public async Task WithoutAnIdentityThereIsNobodyToSignIn(string path)
+    [Test]
+    public async Task WithoutAnIdentityItAsksForOne()
     {
-        var response = await _browser.GetAsync(path);
+        var response = await _browser.GetAsync("/upgrade");
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Redirect));
+        Assert.That(response.Headers.Location!.ToString(), Is.EqualTo("/sign-in"));
+    }
+
+    [Test]
+    public async Task NotAnIdentityIsNobodyToSignIn()
+    {
+        var response = await _browser.GetAsync("/upgrade?id=not%20a%20domain");
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
@@ -261,7 +269,7 @@ public class UpgradePageTests
         var response = await _browser.GetAsync(PathOf(tampered));
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
-        Assert.That((await _browser.GetAsync("/upgrade")).StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), "not signed in");
+        Assert.That((await _browser.GetAsync("/upgrade")).StatusCode, Is.EqualTo(HttpStatusCode.Redirect), "not signed in");
     }
 
     [Test]
@@ -339,7 +347,7 @@ public class UpgradePageTests
     public async Task CheckingOutNeedsASignedInOwner()
     {
         var page = await SignInAsync();
-        Assert.That((await PostFormAsync("/upgrade/sign-out", page)).StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That((await PostFormAsync("/upgrade/sign-out", page)).StatusCode, Is.EqualTo(HttpStatusCode.Redirect));
 
         var response = await PostFormAsync("/upgrade/checkout", page, ("planId", "veterans"));
 

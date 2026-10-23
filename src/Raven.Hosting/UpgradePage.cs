@@ -11,7 +11,7 @@ namespace Raven.Hosting;
 
 /// <summary>
 /// Who is signed in to the upgrade page: an identity whose owner proved it with YouAuth, and the host it was last
-/// seen on. In a data-protected, time-limited cookie scoped to /upgrade.
+/// seen on. In a data-protected, time-limited cookie for the whole site, so the landing page knows them too.
 /// </summary>
 public class UpgradeSession(IDataProtectionProvider dataProtection)
 {
@@ -52,7 +52,7 @@ public class UpgradeSession(IDataProtectionProvider dataProtection)
         HttpOnly = true,
         Secure = true,
         SameSite = SameSiteMode.Lax,
-        Path = UpgradePage.Root,
+        Path = "/",
         MaxAge = Lifetime,
     };
 }
@@ -85,12 +85,20 @@ public static class UpgradePage
 {
     public const string Root = "/upgrade";
 
+    // The plan chosen before signing in, kept across the trip to the identity and back
+    private const string NextPlanCookie = "raven_next_plan";
+
     /// <summary>
     /// Where "Back to your Homebase" goes once the plan is changed. The one place to change it.
     /// </summary>
     public static string ReturnUrl(string identity) => $"https://{identity}/owner/settings/plan";
 
     public static bool SamePlan(string a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether owners can buy it: marked for sale, with a price</summary>
+    public static bool IsForSale(Plan plan) => plan.ForSale && plan.Prices.Count > 0;
+
+    public static string ConfirmUrl(string planId) => $"{Root}/confirm?plan={Uri.EscapeDataString(planId)}";
 
     public static void Map(WebApplication app)
     {
@@ -104,21 +112,25 @@ public static class UpgradePage
         var page = app.MapGroup(Root);
 
         // Step 1, choose. id and host are hints anyone can write into a link: id only says whom to sign in, host is
-        // used only if it is a host this service knows
-        page.MapGet("", async (HttpContext context, string? id, string? host, UpgradeOptions options,
-            UpgradeSession session, YouAuthLogin login, PlanService plans, PlanStore planStore, PlanHosts hosts,
-            IAntiforgery antiforgery) =>
+        // used only if it is a host this service knows. plan, from the landing page, goes straight to confirming it
+        page.MapGet("", async (HttpContext context, string? id, string? host, string? plan, UpgradeOptions options,
+            UpgradeSession session, YouAuthLogin login, PlanService plans, PlanStore planStore, PlanHosts hosts) =>
         {
             if (!options.Enabled)
             {
                 return Results.NotFound();
             }
 
-            var requested = id == null ? null : DomainNames.Normalize(id);
-            if (id != null && requested == null)
+            var chosen = await planStore.GetAsync(plan) is { } p && IsForSale(p) ? p : null;
+            var requested = string.IsNullOrWhiteSpace(id) ? null : DomainNames.Normalize(id);
+            if (!string.IsNullOrWhiteSpace(id) && requested == null)
             {
-                return Message(StatusCodes.Status400BadRequest, "Not an identity",
-                    $"'{id}' is not an identity. Open this page from your Homebase owner console.");
+                return Show<SignInPage>(new
+                {
+                    Plan = chosen,
+                    Identity = id,
+                    Problem = $"'{id}' is not a Homebase identity. Type its domain, like frodo.homebase.id.",
+                }, StatusCodes.Status400BadRequest);
             }
 
             var hint = DomainNames.Normalize(host);
@@ -130,6 +142,11 @@ public static class UpgradePage
             var signedIn = session.Read(context);
             if (signedIn != null && (requested == null || requested == signedIn.Identity))
             {
+                if (chosen != null)
+                {
+                    return Results.Redirect(ConfirmUrl(chosen.Id));
+                }
+
                 var located = await LocateAsync(context, signedIn with { Host = signedIn.Host ?? hint }, session, plans);
                 if (located.Error != null)
                 {
@@ -140,17 +157,23 @@ public static class UpgradePage
                     Identity = located.SignedIn!.Identity,
                     CurrentPlanId = located.PlanId,
                     CurrentPlanName = await PlanNameAsync(planStore, located.PlanId),
-                    Plans = (await planStore.ListAsync()).Where(p => p.ForSale && p.Prices.Count > 0).ToList(),
-                    Antiforgery = antiforgery.GetAndStoreTokens(context),
+                    Plans = (await planStore.ListAsync()).Where(IsForSale).ToList(),
                 });
             }
 
             if (requested == null)
             {
-                return Message(StatusCodes.Status400BadRequest, "Get more space",
-                    "Open this page from your Homebase owner console: Settings, Plan & storage, Get more space.");
+                return Results.Redirect(chosen == null ? SitePages.SignIn : SitePages.SignInFor(chosen.Id));
             }
 
+            if (chosen != null)
+            {
+                context.Response.Cookies.Append(NextPlanCookie, chosen.Id, NextPlanCookieOptions());
+            }
+            else
+            {
+                context.Response.Cookies.Delete(NextPlanCookie, NextPlanCookieOptions());
+            }
             return Results.Redirect(await login.BeginAsync(requested, hint));
         });
 
@@ -171,7 +194,9 @@ public static class UpgradePage
             }
 
             session.Write(context, new UpgradeSession.Data(result.Identity, result.HostHint));
-            return Results.Redirect(Root);
+            var next = context.Request.Cookies[NextPlanCookie];
+            context.Response.Cookies.Delete(NextPlanCookie, NextPlanCookieOptions());
+            return Results.Redirect(PlanIds.IsValid(next) ? ConfirmUrl(next!) : Root);
         });
 
         // Step 2, confirm
@@ -325,16 +350,16 @@ public static class UpgradePage
             }
 
             session.Clear(context);
-            return Message(StatusCodes.Status200OK, "Signed out", "You are signed out.");
+            return Results.Redirect("/");
         });
     }
 
     //
 
-    private record Located(UpgradeSession.Data? SignedIn, string? PlanId, IResult? Error);
+    internal record Located(UpgradeSession.Data? SignedIn, string? PlanId, IResult? Error);
 
     // Where the identity is and its plan, asked of its host; remembers the host in the session when it moved
-    private static async Task<Located> LocateAsync(HttpContext context, UpgradeSession.Data signedIn,
+    internal static async Task<Located> LocateAsync(HttpContext context, UpgradeSession.Data signedIn,
         UpgradeSession session, PlanService plans)
     {
         var located = await plans.LocateAsync(signedIn.Identity, signedIn.Host);
@@ -365,8 +390,21 @@ public static class UpgradePage
     private static PlanPrice? TermOf(Plan plan, int? months) =>
         months == null ? (plan.Prices.Count == 1 ? plan.Prices[0] : null) : plan.PriceFor(months);
 
-    private static RazorComponentResult Show<TPage>(object parameters, int status = StatusCodes.Status200OK)
+    internal static RazorComponentResult Show<TPage>(object parameters, int status = StatusCodes.Status200OK)
         where TPage : IComponent => new RazorComponentResult<TPage>(parameters) { StatusCode = status };
+
+    internal static RazorComponentResult Show<TPage>(IReadOnlyDictionary<string, object?> parameters,
+        int status = StatusCodes.Status200OK)
+        where TPage : IComponent => new RazorComponentResult<TPage>(parameters) { StatusCode = status };
+
+    private static CookieOptions NextPlanCookieOptions() => new()
+    {
+        HttpOnly = true,
+        Secure = true,
+        SameSite = SameSiteMode.Lax,
+        Path = Root,
+        MaxAge = YouAuthLogin.StateLifetime,
+    };
 
     private static RazorComponentResult Message(int status, string title, string message, string? linkText = null,
         string? linkHref = null) =>
@@ -376,14 +414,14 @@ public static class UpgradePage
         plan.Prices.Count == 0
             ? NoPriceYet(plan)
             : Message(StatusCodes.Status400BadRequest, "Choose how to pay", $"{plan.Name} is not sold for that term.",
-                "Choose how to pay", $"{Root}/confirm?plan={Uri.EscapeDataString(plan.Id)}");
+                "Choose how to pay", ConfirmUrl(plan.Id));
 
     private static IResult NoPriceYet(Plan plan) =>
         Message(StatusCodes.Status400BadRequest, "Not for sale yet", $"{plan.Name} has no price yet.",
             "Choose another plan", Root);
 
     private static IResult SessionEnded() => Message(StatusCodes.Status401Unauthorized, "Not signed in",
-        "Your session has ended. Open this page again from your Homebase owner console.");
+        "Your session has ended. Sign in again to choose a plan.", "Sign in", SitePages.SignIn);
 
     private static IResult NotForSale() => Message(StatusCodes.Status400BadRequest, "Not for sale",
         "That plan is not for sale.", "Choose another plan", Root);
