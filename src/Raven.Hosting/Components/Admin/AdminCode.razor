@@ -4,6 +4,32 @@
         <a class="btn btn-secondary" href="@($"{AdminPages.Root}/codes")">All codes</a>
     </Actions>
     <ChildContent>
+        <section class="panel mb-6">
+            <h2 class="panel-title">Share it</h2>
+            <p class="flex items-center gap-2">
+                <span class="font-mono text-lg font-semibold tracking-wide">@Code.Code</span>
+                <CopyButton Text="@Code.Code" Label="code" />
+            </p>
+            <h3 class="mt-5 mb-2 text-sm font-semibold">Sign-up links</h3>
+            <p class="mb-3 text-xs text-muted">The sign-up page with the code filled in. The code works on any of these servers; the first is the site's own sign-up link.</p>
+            <ul class="divide-y divide-line">
+                @foreach (var host in SignupHosts)
+                {
+                    var url = AdminPages.SignupUrl(host, Code.Code);
+                    <li class="flex items-center justify-between gap-2 py-2">
+                        <span class="min-w-0">
+                            <a class="link block truncate text-sm" href="@url" target="_blank" rel="noopener">@url</a>
+                            @if (host == SignupHosts[0])
+                            {
+                                <span class="text-xs text-muted">default</span>
+                            }
+                        </span>
+                        <CopyButton Text="@url" Label="@($"sign-up link ({host})")" />
+                    </li>
+                }
+            </ul>
+        </section>
+
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <section class="panel">
                 <h2 class="panel-title">Can it be used?</h2>
@@ -65,7 +91,12 @@
                     </label>
                     <label class="field">
                         Source
-                        <input class="input" name="source" maxlength="200" value="@Value("source", Code.Source)">
+                        <input class="input" name="source" maxlength="200" value="@Value("source", Code.Source)" list="sources">
+                        <datalist id="sources">@foreach (var source in AdminForm.SourceSuggestions)
+                        {
+                            <option value="@source"></option>
+                        }</datalist>
+                        <span class="field-hint">Marketing: where people found this code, e.g. X, Instagram, a newsletter or an event. Code stats count signups by it, so spell a channel the same way each time.</span>
                     </label>
                     <label class="field">
                         Owner
@@ -98,6 +129,9 @@
     [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
     [Parameter, EditorRequired] public InvitationCode Code { get; set; } = null!;
     [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    /// <summary>The provisioning servers to offer sign-up links for, the default first</summary>
+    [Parameter] public List<string> SignupHosts { get; set; } = [];
 
     /// <summary>A form that was refused, shown as it was sent</summary>
     [Parameter] public IFormCollection? Form { get; set; }

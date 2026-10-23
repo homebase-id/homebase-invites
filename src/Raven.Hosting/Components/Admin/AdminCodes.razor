@@ -26,8 +26,12 @@
                 </label>
                 <label class="field">
                     Source
-                    <input class="input" name="source" required maxlength="200" value="@Value("source", null)" placeholder="spring campaign">
-                    <span class="field-hint">Where the code came from.</span>
+                    <input class="input" name="source" required maxlength="200" value="@Value("source", null)" placeholder="Instagram" list="sources">
+                    <datalist id="sources">@foreach (var source in AdminForm.SourceSuggestions)
+                    {
+                        <option value="@source"></option>
+                    }</datalist>
+                    <span class="field-hint">Marketing: where people found this code, e.g. X, Instagram, a newsletter or an event. Code stats count signups by it, so spell a channel the same way each time.</span>
                 </label>
                 <label class="field">
                     Owner
@@ -64,7 +68,13 @@
                             @foreach (var item in Codes)
                             {
                                 <tr>
-                                    <td class="font-mono whitespace-nowrap"><a class="link" href="@AdminPages.CodeUrl(item.Code)">@item.Code</a></td>
+                                    <td class="whitespace-nowrap">
+                                        <span class="flex items-center gap-1">
+                                            <a class="link font-mono" href="@AdminPages.CodeUrl(item.Code)">@item.Code</a>
+                                            <CopyButton Text="@item.Code" Label="code" />
+                                            <CopyButton Text="@AdminPages.SignupUrl(SignupHost, item.Code)" Label="@($"sign-up link ({SignupHost})")" />
+                                        </span>
+                                    </td>
                                     <td>@(item.PlanId ?? "-")</td>
                                     <td class="whitespace-nowrap tabular-nums">@item.UsesLeft <span class="text-muted">of @item.MaxUses</span></td>
                                     <td class="text-xs">@item.Owner</td>
@@ -93,6 +103,9 @@
     [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
     [Parameter] public List<InvitationCode> Codes { get; set; } = [];
     [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    /// <summary>The provisioning server the codes' copied sign-up links go to</summary>
+    [Parameter] public string SignupHost { get; set; } = "";
 
     /// <summary>The filter: only this owner's codes</summary>
     [Parameter] public string? Owner { get; set; }
