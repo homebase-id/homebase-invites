@@ -85,6 +85,8 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
     protected override IHost CreateHost(IHostBuilder builder)
     {
         var host = base.CreateHost(builder);
+        // A new service sells nothing until purchases are opened; the tests buy, so open them
+        host.Services.GetRequiredService<PurchaseAccessStore>().SetOpenAsync(true).GetAwaiter().GetResult();
         if (seedPlans)
         {
             var plans = host.Services.GetRequiredService<PlanStore>();

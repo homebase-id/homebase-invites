@@ -121,6 +121,20 @@ Bad input (a bad or reserved Id, no name, a quota of 0 or less, a missing `quota
 Changing a price changes nothing for purchases already made: a purchase grant keeps the term and price it was
 bought at.
 
+### Who may buy (`/api/v1/purchases`, create key)
+
+Until real card processing is in, buying on the upgrade page is locked. Everyone can see the plans, sign in and
+confirm a plan, but only **testers** can check out; anyone else sees **Coming soon** in place of the checkout button,
+and a checkout they reach anyway (`GET` or `POST /upgrade/checkout`) is a 403 "Coming soon" page. A new service
+starts closed, with no testers. Admin grants are not affected. `raven.sh purchases` shows and changes it.
+
+| Call | Answer |
+|---|---|
+| `GET /` | `{open, testers: [{identity, addedAt}]}` |
+| `PUT /open {open}` | the same, after opening (`true`: anyone signed in may buy) or closing (`false`: only testers) |
+| `PUT /testers/<identity>` | the same, with the identity added; adding one already there changes nothing. 400 for a name that is not a domain |
+| `DELETE /testers/<identity>` | the same, without it; 404 if it is not a tester |
+
 ### Deploying plans
 
 There are no built-in plans. After deploying, and before anyone signs up, create them: until then every code's

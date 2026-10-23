@@ -30,6 +30,8 @@ var grantStore = new PlanGrantStore(databasePath);
 builder.Services.AddSingleton(planStore);
 var reportStore = new ReportStore(databasePath);
 builder.Services.AddSingleton(reportStore);
+var purchaseAccess = new PurchaseAccessStore(databasePath);
+builder.Services.AddSingleton(purchaseAccess);
 
 var planHosts = PlanHosts.FromConfiguration(builder.Configuration);
 builder.Services.AddSingleton(planHosts);
@@ -252,6 +254,26 @@ plansApi.MapDelete("/{id}", async (string id) =>
 // Plan grants, create key: admins now, the payment flow later (as purchase grants)
 //
 
+//
+// Who may buy on the upgrade page, create key: admins. Closed, with no testers, until an admin opens it
+//
+
+var purchasesApi = app.MapGroup(PurchaseApi.Root)
+    .AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid)
+    .WithMetadata(new ApiKey(createApiKey));
+
+purchasesApi.MapGet("/", async () => await purchaseAccess.GetAsync());
+
+purchasesApi.MapPut("/open", async (PurchasesOpenRequest request) =>
+    await purchaseAccess.SetOpenAsync(
+        request.Open ?? throw new InvalidPurchaseAccessRequestException("open is required: true or false")));
+
+purchasesApi.MapPut("/testers/{identity}", async (string identity, TimeProvider time) =>
+    await purchaseAccess.AddTesterAsync(identity, time.GetUtcNow().ToUnixTimeMilliseconds()));
+
+purchasesApi.MapDelete("/testers/{identity}", async (string identity) =>
+    await purchaseAccess.RemoveTesterAsync(identity) is { } access ? Results.Ok(access) : Results.NotFound());
+
 var grants = app.MapGroup(PlanGrantApi.Root)
     .AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid)
     .WithMetadata(new ApiKey(createApiKey));
@@ -360,6 +382,11 @@ internal static class PlanApi
 internal static class ReportApi
 {
     public const string Root = "/api/v1/reports";
+}
+
+internal static class PurchaseApi
+{
+    public const string Root = "/api/v1/purchases";
 }
 
 internal static class PlanGrantApi

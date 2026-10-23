@@ -21,9 +21,20 @@
             }
         </fieldset>
         <div class="actions">
-            <button type="submit">Continue to checkout</button>
+            @if (CanBuy)
+            {
+                <button type="submit">Continue to checkout</button>
+            }
+            else
+            {
+                <button type="submit" disabled>Coming soon</button>
+            }
             <a class="button secondary" href="@UpgradePage.Root">Back</a>
         </div>
+        @if (!CanBuy)
+        {
+            <p class="muted">Buying a plan here opens soon. Until then your plan stays as it is.</p>
+        }
     </form>
 </SitePage>
 
@@ -33,4 +44,7 @@
 
     /// <summary>What the owner has now, as their host says</summary>
     [Parameter] public IdentityOnHost? Now { get; set; }
+
+    /// <summary>Whether they may buy: purchases are open, or they are a tester</summary>
+    [Parameter] public bool CanBuy { get; set; }
 }

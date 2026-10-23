@@ -203,7 +203,7 @@ public static class UpgradePage
 
         // Step 2, confirm
         page.MapGet("/confirm", async (HttpContext context, string? plan, UpgradeOptions options,
-            UpgradeSession session, PlanService plans, PlanStore planStore) =>
+            UpgradeSession session, PlanService plans, PlanStore planStore, PurchaseAccessStore purchaseAccess) =>
         {
             if (!options.Enabled)
             {
@@ -241,12 +241,13 @@ public static class UpgradePage
                 Plan = chosen,
                 Now = located.Now,
                 CurrentPlanName = await PlanNameAsync(planStore, located.PlanId),
+                CanBuy = await purchaseAccess.CanBuyAsync(signedIn.Identity),
             });
         });
 
         // Step 3, a test checkout of the term chosen
         page.MapGet("/checkout", async (HttpContext context, string? plan, int? months, UpgradeOptions options,
-            UpgradeSession session, PlanStore planStore, IAntiforgery antiforgery) =>
+            UpgradeSession session, PlanStore planStore, IAntiforgery antiforgery, PurchaseAccessStore purchaseAccess) =>
         {
             if (!options.Enabled)
             {
@@ -257,6 +258,10 @@ public static class UpgradePage
             if (signedIn == null)
             {
                 return SessionEnded();
+            }
+            if (!await purchaseAccess.CanBuyAsync(signedIn.Identity))
+            {
+                return NotOpenYet();
             }
 
             var chosen = await ForSaleAsync(planStore, plan);
@@ -282,7 +287,8 @@ public static class UpgradePage
         // Completing the test checkout makes a purchase grant of the plan and term, which sets the plan on the
         // identity's host. Only planId and months are read; anything else in the form is ignored
         page.MapPost("/checkout", async (HttpContext context, [FromForm] string? planId, [FromForm] int? months,
-            UpgradeOptions options, UpgradeSession session, PlanService plans, PlanStore planStore) =>
+            UpgradeOptions options, UpgradeSession session, PlanService plans, PlanStore planStore,
+            PurchaseAccessStore purchaseAccess) =>
         {
             if (!options.Enabled)
             {
@@ -293,6 +299,12 @@ public static class UpgradePage
             if (signedIn == null)
             {
                 return SessionEnded();
+            }
+
+            // The lock: until purchases open, only testers can change their plan here
+            if (!await purchaseAccess.CanBuyAsync(signedIn.Identity))
+            {
+                return NotOpenYet();
             }
 
             var plan = await ForSaleAsync(planStore, planId);
@@ -446,6 +458,9 @@ public static class UpgradePage
     private static IResult TooSmall(Plan plan, PlanFit fit) => Message(StatusCodes.Status400BadRequest,
         "Too small", $"{plan.Name} has {plan.Storage}. {fit.Note}: choose a plan with more room.", "Choose another plan",
         Root);
+
+    private static IResult NotOpenYet() => Message(StatusCodes.Status403Forbidden, "Coming soon",
+        "Buying a plan here opens soon. Until then your plan stays as it is.", "See the plans", Root);
 
     private static IResult NotForSale() => Message(StatusCodes.Status400BadRequest, "Not for sale",
         "That plan is not for sale.", "Choose another plan", Root);
