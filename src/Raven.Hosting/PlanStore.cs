@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
@@ -180,12 +181,16 @@ public static class BillingTerm
 }
 
 /// <summary>
-/// The hosting plans and their prices, in the same SQLite file as the codes and grants. There are no built-in plans:
-/// the operator creates them (README, "Plans").
+/// The hosting plans, in the same SQLite file as the codes and grants: one row per plan, its Id and a JSON document
+/// with everything else, prices included. A new field is a new property in the document, not a new column; a
+/// document written before a field existed reads it as its default. There are no built-in plans: the operator
+/// creates them (README, "Plans").
 /// </summary>
 public class PlanStore
 {
     private const int SqliteConstraintError = 19;
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly string _databasePath;
     private readonly string _connectionString;
@@ -250,37 +255,18 @@ public class PlanStore
             request.SortOrder ?? 0, now, now);
 
         await using var connection = await OpenAsync();
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
-        await using (var command = connection.CreateCommand())
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO plans (id, json) VALUES (@id, @json);";
+        command.Parameters.AddWithValue("@id", plan.Id);
+        command.Parameters.AddWithValue("@json", Write(plan));
+        try
         {
-            command.CommandText =
-                """
-                INSERT INTO plans (id, name, description, quota_bytes, public_web_presence, for_sale, sort_order,
-                                   created_at, updated_at)
-                VALUES (@id, @name, @description, @quotaBytes, @publicWebPresence, @forSale, @sortOrder, @now, @now);
-                """;
-            command.Parameters.AddWithValue("@id", plan.Id);
-            command.Parameters.AddWithValue("@name", plan.Name);
-            command.Parameters.AddWithValue("@description", plan.Description);
-            command.Parameters.AddWithValue("@quotaBytes", plan.QuotaBytes);
-            command.Parameters.AddWithValue("@publicWebPresence", plan.PublicWebPresence);
-            command.Parameters.AddWithValue("@forSale", plan.ForSale);
-            command.Parameters.AddWithValue("@sortOrder", plan.SortOrder);
-            command.Parameters.AddWithValue("@now", now);
-            try
-            {
-                await command.ExecuteNonQueryAsync();
-            }
-            catch (SqliteException e) when (e.SqliteErrorCode == SqliteConstraintError)
-            {
-                throw new PlanConflictException($"There is already a plan '{id}'");
-            }
+            await command.ExecuteNonQueryAsync();
         }
-        foreach (var price in prices)
+        catch (SqliteException e) when (e.SqliteErrorCode == SqliteConstraintError)
         {
-            await SetPriceAsync(connection, plan.Id, price);
+            throw new PlanConflictException($"There is already a plan '{id}'");
         }
-        await transaction.CommitAsync();
         return plan;
     }
 
@@ -307,16 +293,15 @@ public class PlanStore
     public async Task<List<Plan>> ListAsync()
     {
         await using var connection = await OpenAsync();
-        var prices = await ReadPricesAsync(connection, null);
         await using var command = connection.CreateCommand();
-        command.CommandText = Select + " ORDER BY sort_order, id;";
+        command.CommandText = "SELECT id, json FROM plans;";
         await using var reader = await command.ExecuteReaderAsync();
         var plans = new List<Plan>();
         while (await reader.ReadAsync())
         {
-            plans.Add(Read(reader, prices));
+            plans.Add(Read(reader.GetString(0), reader.GetString(1)));
         }
-        return plans;
+        return plans.OrderBy(p => p.SortOrder).ThenBy(p => p.Id, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     //
@@ -325,100 +310,52 @@ public class PlanStore
     /// Changes a plan and returns it as it is now; null if there is no such plan. Identities already on it keep
     /// what they were given.
     /// </summary>
-    public async Task<Plan?> UpdateAsync(string? id, PlanChange change)
+    public Task<Plan?> UpdateAsync(string? id, PlanChange change)
     {
-        var trimmed = id?.Trim();
-        if (!PlanIds.IsValid(trimmed))
+        if (change.Name != null && change.Name.Trim() == "")
         {
-            return null;
-        }
-
-        var sets = new List<string>();
-        await using var connection = await OpenAsync();
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
-        await using var command = connection.CreateCommand();
-
-        if (change.Name != null)
-        {
-            if (change.Name.Trim() == "")
-            {
-                throw new InvalidPlanRequestException("name cannot be empty");
-            }
-            sets.Add("name = @name");
-            command.Parameters.AddWithValue("@name", change.Name.Trim());
-        }
-        if (change.Description != null)
-        {
-            sets.Add("description = @description");
-            command.Parameters.AddWithValue("@description", change.Description.Trim());
+            throw new InvalidPlanRequestException("name cannot be empty");
         }
         if (change.QuotaBytes != null)
         {
             CheckQuota(change.QuotaBytes.Value);
-            sets.Add("quota_bytes = @quotaBytes");
-            command.Parameters.AddWithValue("@quotaBytes", change.QuotaBytes.Value);
         }
-        if (change.PublicWebPresence != null)
-        {
-            sets.Add("public_web_presence = @publicWebPresence");
-            command.Parameters.AddWithValue("@publicWebPresence", change.PublicWebPresence.Value);
-        }
-        if (change.ForSale != null)
-        {
-            sets.Add("for_sale = @forSale");
-            command.Parameters.AddWithValue("@forSale", change.ForSale.Value);
-        }
-        if (change.SortOrder != null)
-        {
-            sets.Add("sort_order = @sortOrder");
-            command.Parameters.AddWithValue("@sortOrder", change.SortOrder.Value);
-        }
-        if (sets.Count == 0)
+        if (change is { Name: null, Description: null, QuotaBytes: null, PublicWebPresence: null, ForSale: null,
+                SortOrder: null })
         {
             throw new InvalidPlanRequestException("Nothing to change");
         }
 
-        var plan = await GetAsync(connection, trimmed!);
-        if (plan == null)
+        return ChangeAsync(id, plan =>
         {
-            return null;
-        }
-        if (change.ForSale == true && plan.Prices.Count == 0)
-        {
-            throw new InvalidPlanRequestException(
-                $"A plan for sale needs at least one price; give {plan.Id} one first (raven.sh plan-price)");
-        }
-
-        command.CommandText = $"UPDATE plans SET {string.Join(", ", sets)}, updated_at = @now WHERE id = @id;";
-        command.Parameters.AddWithValue("@id", plan.Id);
-        command.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        await command.ExecuteNonQueryAsync();
-        await transaction.CommitAsync();
-        return await GetAsync(connection, plan.Id);
+            if (change.ForSale == true && plan.Prices.Count == 0)
+            {
+                throw new InvalidPlanRequestException(
+                    $"A plan for sale needs at least one price; give {plan.Id} one first (raven.sh plan-price)");
+            }
+            return plan with
+            {
+                Name = change.Name?.Trim() ?? plan.Name,
+                Description = change.Description?.Trim() ?? plan.Description,
+                QuotaBytes = change.QuotaBytes ?? plan.QuotaBytes,
+                PublicWebPresence = change.PublicWebPresence ?? plan.PublicWebPresence,
+                ForSale = change.ForSale ?? plan.ForSale,
+                SortOrder = change.SortOrder ?? plan.SortOrder,
+            };
+        });
     }
 
     /// <summary>
     /// Sets what the plan costs for this many months, adding the term or changing its amount; null if there is no
     /// such plan
     /// </summary>
-    public async Task<Plan?> SetPriceAsync(string? id, int months, long amountCents)
+    public Task<Plan?> SetPriceAsync(string? id, int months, long amountCents)
     {
         var price = CheckPrice(months, amountCents);
-        var trimmed = id?.Trim();
-        if (!PlanIds.IsValid(trimmed))
+        return ChangeAsync(id, plan => plan with
         {
-            return null;
-        }
-
-        await using var connection = await OpenAsync();
-        var plan = await GetAsync(connection, trimmed!);
-        if (plan == null)
-        {
-            return null;
-        }
-        await SetPriceAsync(connection, plan.Id, price);
-        await TouchAsync(connection, plan.Id);
-        return await GetAsync(connection, plan.Id);
+            Prices = plan.Prices.Where(p => p.Months != months).Append(price).OrderBy(p => p.Months).ToList(),
+        });
     }
 
     /// <summary>
@@ -427,37 +364,26 @@ public class PlanStore
     /// </summary>
     public async Task<(Plan? Plan, bool Found)> RemovePriceAsync(string? id, int months)
     {
-        var trimmed = id?.Trim();
-        if (!PlanIds.IsValid(trimmed))
+        var found = false;
+        var plan = await ChangeAsync(id, plan =>
         {
-            return (null, false);
-        }
-
-        await using var connection = await OpenAsync();
-        var plan = await GetAsync(connection, trimmed!);
-        if (plan?.PriceFor(months) == null)
-        {
-            return (plan, false);
-        }
-        if (plan.ForSale && plan.Prices.Count == 1)
-        {
-            throw new PlanConflictException(
-                $"{plan.Id} is for sale and this is its only price; mark it not for sale first, or add another price");
-        }
-
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText = "DELETE FROM plan_prices WHERE plan_id = @id AND months = @months;";
-            command.Parameters.AddWithValue("@id", plan.Id);
-            command.Parameters.AddWithValue("@months", months);
-            await command.ExecuteNonQueryAsync();
-        }
-        await TouchAsync(connection, plan.Id);
-        return (await GetAsync(connection, plan.Id), true);
+            if (plan.PriceFor(months) == null)
+            {
+                return null;
+            }
+            if (plan.ForSale && plan.Prices.Count == 1)
+            {
+                throw new PlanConflictException(
+                    $"{plan.Id} is for sale and this is its only price; mark it not for sale first, or add another price");
+            }
+            found = true;
+            return plan with { Prices = plan.Prices.Where(p => p.Months != months).ToList() };
+        });
+        return (plan, found);
     }
 
     /// <summary>
-    /// Deletes a plan and its prices; false if there is none. The caller checks no code or grant uses it.
+    /// Deletes a plan; false if there is none. The caller checks no code or grant uses it.
     /// </summary>
     public async Task<bool> DeleteAsync(string? id)
     {
@@ -469,90 +395,83 @@ public class PlanStore
 
         await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM plan_prices WHERE plan_id = @id; DELETE FROM plans WHERE id = @id;";
+        command.CommandText = "DELETE FROM plans WHERE id = @id;";
         command.Parameters.AddWithValue("@id", trimmed);
-        await command.ExecuteNonQueryAsync();
-        await using var changes = connection.CreateCommand();
-        changes.CommandText = "SELECT changes();";
-        return Convert.ToInt64(await changes.ExecuteScalarAsync()) == 1;
+        return await command.ExecuteNonQueryAsync() == 1;
     }
 
     //
 
-    private const string Select =
-        """
-        SELECT id, name, description, quota_bytes, public_web_presence, for_sale, sort_order, created_at, updated_at
-        FROM plans
-        """;
+    // Reads the plan, changes it, and writes it back with a new updatedAt, holding the write lock throughout so two
+    // changes cannot overwrite each other. Null from the change leaves the plan as it is. Returns the plan as it is
+    // now; null if there is no such plan.
+    private async Task<Plan?> ChangeAsync(string? id, Func<Plan, Plan?> change)
+    {
+        var trimmed = id?.Trim();
+        if (!PlanIds.IsValid(trimmed))
+        {
+            return null;
+        }
+
+        await using var connection = await OpenAsync();
+        await using var transaction = connection.BeginTransaction(deferred: false);
+        var plan = await GetAsync(connection, trimmed!);
+        if (plan == null)
+        {
+            return null;
+        }
+
+        var changed = change(plan);
+        if (changed == null)
+        {
+            return plan;
+        }
+        changed = changed with { UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE plans SET json = @json WHERE id = @id;";
+        command.Parameters.AddWithValue("@id", plan.Id);
+        command.Parameters.AddWithValue("@json", Write(changed));
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+        return changed;
+    }
 
     private static async Task<Plan?> GetAsync(SqliteConnection connection, string id)
     {
-        var prices = await ReadPricesAsync(connection, id);
         await using var command = connection.CreateCommand();
-        command.CommandText = Select + " WHERE id = @id;";
+        command.CommandText = "SELECT id, json FROM plans WHERE id = @id;";
         command.Parameters.AddWithValue("@id", id);
         await using var reader = await command.ExecuteReaderAsync();
-        return await reader.ReadAsync() ? Read(reader, prices) : null;
+        return await reader.ReadAsync() ? Read(reader.GetString(0), reader.GetString(1)) : null;
     }
 
-    // Prices by plan Id (in any case), shortest term first; only one plan's when an Id is given
-    private static async Task<Dictionary<string, List<PlanPrice>>> ReadPricesAsync(SqliteConnection connection,
-        string? id)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT plan_id, months, amount_cents FROM plan_prices" +
-                              (id == null ? "" : " WHERE plan_id = @id") + " ORDER BY months;";
-        if (id != null)
-        {
-            command.Parameters.AddWithValue("@id", id);
-        }
-        var prices = new Dictionary<string, List<PlanPrice>>(StringComparer.OrdinalIgnoreCase);
-        await using var reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            var planId = reader.GetString(0);
-            if (!prices.TryGetValue(planId, out var list))
-            {
-                prices[planId] = list = [];
-            }
-            list.Add(new PlanPrice(reader.GetInt32(1), reader.GetInt64(2)));
-        }
-        return prices;
-    }
+    // What is kept for a plan: everything but its Id, which is the row's
+    private record Stored(
+        string Name = "",
+        string Description = "",
+        long QuotaBytes = 0,
+        bool PublicWebPresence = false,
+        bool ForSale = false,
+        List<StoredPrice>? Prices = null,
+        int SortOrder = 0,
+        long CreatedAt = 0,
+        long UpdatedAt = 0);
 
-    private static Plan Read(SqliteDataReader reader, Dictionary<string, List<PlanPrice>> prices) => new(
-        reader.GetString(0),
-        reader.GetString(1),
-        reader.GetString(2),
-        reader.GetInt64(3),
-        reader.GetBoolean(4),
-        reader.GetBoolean(5),
-        prices.TryGetValue(reader.GetString(0), out var list) ? list : [],
-        reader.GetInt32(6),
-        reader.GetInt64(7),
-        reader.GetInt64(8));
+    private record StoredPrice(int Months, long AmountCents);
 
-    private static async Task SetPriceAsync(SqliteConnection connection, string planId, PlanPrice price)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            INSERT INTO plan_prices (plan_id, months, amount_cents) VALUES (@id, @months, @amountCents)
-            ON CONFLICT (plan_id, months) DO UPDATE SET amount_cents = excluded.amount_cents;
-            """;
-        command.Parameters.AddWithValue("@id", planId);
-        command.Parameters.AddWithValue("@months", price.Months);
-        command.Parameters.AddWithValue("@amountCents", price.AmountCents);
-        await command.ExecuteNonQueryAsync();
-    }
+    private static string Write(Plan plan) => JsonSerializer.Serialize(new Stored(plan.Name, plan.Description,
+        plan.QuotaBytes, plan.PublicWebPresence, plan.ForSale,
+        plan.Prices.Select(p => new StoredPrice(p.Months, p.AmountCents)).ToList(), plan.SortOrder, plan.CreatedAt,
+        plan.UpdatedAt), Json);
 
-    private static async Task TouchAsync(SqliteConnection connection, string planId)
+    private static Plan Read(string id, string json)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE plans SET updated_at = @now WHERE id = @id;";
-        command.Parameters.AddWithValue("@id", planId);
-        command.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        await command.ExecuteNonQueryAsync();
+        var stored = JsonSerializer.Deserialize<Stored>(json, Json) ?? new Stored();
+        return new Plan(id, stored.Name, stored.Description, stored.QuotaBytes, stored.PublicWebPresence,
+            stored.ForSale,
+            (stored.Prices ?? []).Select(p => new PlanPrice(p.Months, p.AmountCents)).OrderBy(p => p.Months).ToList(),
+            stored.SortOrder, stored.CreatedAt, stored.UpdatedAt);
     }
 
     private static PlanPrice CheckPrice(int months, long amountCents)
@@ -584,7 +503,7 @@ public class PlanStore
         return connection;
     }
 
-    // Creates the tables on first use, next to the codes' and grants'
+    // Creates the table on first use, next to the codes' and grants'
     private async Task InitializeAsync()
     {
         if (_initialized)
@@ -608,42 +527,22 @@ public class PlanStore
 
             await using var connection = new SqliteConnection(_connectionString);
             await connection.OpenAsync();
+            await using (var wal = connection.CreateCommand())
+            {
+                wal.CommandText = "PRAGMA journal_mode=WAL;";
+                await wal.ExecuteNonQueryAsync();
+            }
+            await MoveColumnsToJsonAsync(connection);
             await using (var command = connection.CreateCommand())
             {
                 command.CommandText =
                     """
-                    PRAGMA journal_mode=WAL;
                     CREATE TABLE IF NOT EXISTS plans (
                         id TEXT NOT NULL PRIMARY KEY COLLATE NOCASE,
-                        name TEXT NOT NULL,
-                        description TEXT NOT NULL,
-                        quota_bytes INTEGER NOT NULL CHECK (quota_bytes > 0),
-                        public_web_presence INTEGER NOT NULL,
-                        for_sale INTEGER NOT NULL,
-                        sort_order INTEGER NOT NULL,
-                        created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL
-                    );
-                    CREATE TABLE IF NOT EXISTS plan_prices (
-                        plan_id TEXT NOT NULL COLLATE NOCASE,
-                        months INTEGER NOT NULL CHECK (months BETWEEN 1 AND 120),
-                        amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
-                        PRIMARY KEY (plan_id, months)
+                        json TEXT NOT NULL
                     );
                     """;
                 await command.ExecuteNonQueryAsync();
-            }
-
-            // The first plans table had one free-text price; prices are their own table now
-            await using (var columns = connection.CreateCommand())
-            {
-                columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('plans') WHERE name = 'price';";
-                if (Convert.ToInt64(await columns.ExecuteScalarAsync()) == 1)
-                {
-                    await using var drop = connection.CreateCommand();
-                    drop.CommandText = "ALTER TABLE plans DROP COLUMN price;";
-                    await drop.ExecuteNonQueryAsync();
-                }
             }
 
             _initialized = true;
@@ -652,5 +551,57 @@ public class PlanStore
         {
             _initializeLock.Release();
         }
+    }
+
+    // The first plans table had a column per field and a free-text price. Its plans move into documents, and the
+    // table is replaced by the Id-and-JSON one. The price text is not a price, so they have none, and so are not for
+    // sale: a plan for sale needs one.
+    private static async Task MoveColumnsToJsonAsync(SqliteConnection connection)
+    {
+        await using (var columns = connection.CreateCommand())
+        {
+            columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('plans') WHERE name = 'quota_bytes';";
+            if (Convert.ToInt64(await columns.ExecuteScalarAsync()) == 0)
+            {
+                return;
+            }
+        }
+
+        await using var transaction = connection.BeginTransaction(deferred: false);
+        var plans = new List<Plan>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.CommandText =
+                "SELECT id, name, description, quota_bytes, public_web_presence, for_sale, sort_order, created_at, " +
+                "updated_at FROM plans;";
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                plans.Add(new Plan(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3),
+                    reader.GetBoolean(4), false, [], reader.GetInt32(6), reader.GetInt64(7), reader.GetInt64(8)));
+            }
+        }
+
+        await using (var replace = connection.CreateCommand())
+        {
+            replace.CommandText =
+                """
+                DROP TABLE plans;
+                CREATE TABLE plans (
+                    id TEXT NOT NULL PRIMARY KEY COLLATE NOCASE,
+                    json TEXT NOT NULL
+                );
+                """;
+            await replace.ExecuteNonQueryAsync();
+        }
+        foreach (var plan in plans)
+        {
+            await using var insert = connection.CreateCommand();
+            insert.CommandText = "INSERT INTO plans (id, json) VALUES (@id, @json);";
+            insert.Parameters.AddWithValue("@id", plan.Id);
+            insert.Parameters.AddWithValue("@json", Write(plan));
+            await insert.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
     }
 }

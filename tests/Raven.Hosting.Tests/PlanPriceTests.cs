@@ -3,7 +3,8 @@ using Microsoft.Data.Sqlite;
 namespace Raven.Hosting.Tests;
 
 /// <summary>
-/// Prices as people read them, what longer terms save, and the plans table from before prices had their own
+/// Prices as people read them, what longer terms save, and how plans are kept: a JSON document per plan, and the
+/// column-per-field table from before
 /// </summary>
 public class PlanPriceTests
 {
@@ -51,7 +52,7 @@ public class PlanPriceTests
     }
 
     [Test]
-    public async Task ThePlansTableFromBeforePricesLosesItsPriceColumn()
+    public async Task ThePlansTableFromBeforeMovesIntoDocuments()
     {
         var path = TempDatabase.NewPath();
         try
@@ -79,6 +80,72 @@ public class PlanPriceTests
             Assert.That(old!.Name, Is.EqualTo("Old"), "kept");
             Assert.That(old.Prices, Is.Empty, "the free-text price is not a price");
             Assert.That(created.Prices, Is.EqualTo(new[] { new PlanPrice(1, 100) }));
+        }
+        finally
+        {
+            TempDatabase.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task APlanIsKeptAsItsIdAndADocument()
+    {
+        var path = TempDatabase.NewPath();
+        try
+        {
+            await new PlanStore(path).CreateAsync(new PlanRequest("gold", "Gold", 1, true, Prices: [new(12, 5000)]));
+
+            await using var connection = new SqliteConnection($"Data Source={path}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT name FROM pragma_table_info('plans') ORDER BY cid;";
+            var columns = new List<string>();
+            await using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync()) columns.Add(reader.GetString(0));
+            }
+            command.CommandText = "SELECT json FROM plans WHERE id = 'gold';";
+            var json = (string)(await command.ExecuteScalarAsync())!;
+
+            Assert.That(columns, Is.EqualTo(new[] { "id", "json" }));
+            Assert.That(json, Does.Contain("\"prices\":[{\"months\":12,\"amountCents\":5000}]"));
+            Assert.That(json, Does.Not.Contain("\"text\""), "only what is kept, not what is worked out from it");
+        }
+        finally
+        {
+            TempDatabase.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ADocumentWithoutAFieldReadsItsDefault_AndOneWithAnUnknownFieldIgnoresIt()
+    {
+        var path = TempDatabase.NewPath();
+        try
+        {
+            var store = new PlanStore(path);
+            await store.ListAsync(); // makes the table
+            await using (var connection = new SqliteConnection($"Data Source={path}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    INSERT INTO plans (id, json) VALUES
+                        ('older', '{"name":"Older","quotaBytes":5}'),
+                        ('newer', '{"name":"Newer","quotaBytes":5,"badge":"Popular","prices":[{"months":1,"amountCents":100,"currency":"USD"}]}');
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var older = (await store.GetAsync("older"))!;
+            var newer = (await store.GetAsync("newer"))!;
+
+            Assert.That((older.Name, older.Description, older.ForSale, older.Prices.Count, older.SortOrder),
+                Is.EqualTo(("Older", "", false, 0, 0)));
+            Assert.That(newer.Prices, Is.EqualTo(new[] { new PlanPrice(1, 100) }));
+            var edited = await store.UpdateAsync("older", new PlanChange(Description: "Edited"));
+            Assert.That(edited!.Description, Is.EqualTo("Edited"));
         }
         finally
         {
