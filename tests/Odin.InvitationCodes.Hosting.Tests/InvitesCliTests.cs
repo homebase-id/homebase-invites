@@ -53,7 +53,7 @@ public class InvitesCliTests
         var result = await RunAsync("help");
 
         Assert.That(result.ExitCode, Is.EqualTo(0));
-        foreach (var command in new[] { "setup", "ping", "create", "list", "stats", "edit", "disable", "enable", "grant", "grants", "retry", "validate", "use", "undo" })
+        foreach (var command in new[] { "setup", "ping", "plans", "plan-create", "plan-edit", "plan-delete", "create", "list", "stats", "edit", "disable", "enable", "grant", "grants", "retry", "validate", "use", "undo" })
         {
             Assert.That(result.Output, Does.Contain($"  {command}"), command);
         }
@@ -261,7 +261,9 @@ public class InvitesCliTests
     {
         var code = await CreateAsync(maxUses: 1);
 
-        Assert.That((await RunAsync("use", code.Code)).Json<UseResponse>(), Is.EqualTo(new UseResponse(true, code with { UsesLeft = 0 })));
+        Assert.That((await RunAsync("use", code.Code)).Json<UseResponse>(), Is.EqualTo(new UseResponse(true,
+            UsedInvitationCode.From(code with { UsesLeft = 0 }, null) with
+                { QuotaBytes = 64424509440, PublicWebPresence = true })));
         Assert.That((await RunAsync("validate", code.Code)).Json<ValidateResponse>().Valid, Is.False);
 
         Assert.That((await RunAsync("undo", code.Code)).Status, Is.EqualTo(204));
@@ -273,6 +275,7 @@ public class InvitesCliTests
     [Test]
     public async Task StatsPrintsAReport()
     {
+        await CreatePlanAsync("stats-plan");
         var code = await CreateAsync(maxUses: 3, owner: "stats-owner.dotyou.cloud", source: "stats-source", planId: "stats-plan");
         await RunAsync("use", code.Code);
 
@@ -324,6 +327,103 @@ public class InvitesCliTests
 
         Assert.That(result.ExitCode, Is.EqualTo(1));
         Assert.That(result.Output, Does.EndWith("[401]\n"));
+    }
+
+    //
+    // Plans
+    //
+
+    [Test]
+    public async Task PlanCreatePrintsThePlan()
+    {
+        var result = await RunAsync("plan-create", "--id", "cli-gold", "--name", "Gold", "--quota-bytes", "5368709120",
+            "--public-web-presence", "false", "--for-sale", "true", "--price", "$2 a month", "--sort-order", "-1",
+            "--description", "A small plan");
+
+        var plan = result.Json<Plan>();
+        Assert.That(plan with { CreatedAt = 0, UpdatedAt = 0 }, Is.EqualTo(new Plan("cli-gold", "Gold", "A small plan",
+            5368709120, false, true, "$2 a month", -1, 0, 0)));
+    }
+
+    [Test]
+    public async Task PlansPrintsATable()
+    {
+        await CreatePlanAsync("cli-table", "--name", "Table plan", "--for-sale", "true", "--price", "$1");
+
+        var result = await RunAsync("plans");
+
+        Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
+        var lines = result.Output.Split('\n');
+        Assert.That(lines[0], Does.Match(@"^ID +NAME +STORAGE +PUBLIC PAGE +FOR SALE +PRICE +ORDER$"));
+        Assert.That(lines, Has.Some.Match(@"^cli-table +Table plan +1 TB +yes +yes +\$1 +0$"));
+        Assert.That(lines, Has.Some.Match(@"^tiny-test +Tiny test +1 MB +no +no +- +0$"));
+        Assert.That((await RunAsync("plans", "--json")).Json<List<Plan>>().Select(p => p.Id), Does.Contain("cli-table"));
+    }
+
+    [Test]
+    public async Task PlanEditChangesOnlyWhatIsGiven()
+    {
+        var plan = await CreatePlanAsync("cli-edit", "--for-sale", "true", "--price", "$3");
+
+        var result = await RunAsync("plan-edit", "CLI-EDIT", "--for-sale", "false", "--quota-bytes", "2199023255552");
+
+        var edited = result.Json<Plan>();
+        Assert.That(edited with { UpdatedAt = 0 }, Is.EqualTo(plan with
+            { ForSale = false, QuotaBytes = 2199023255552, UpdatedAt = 0 }));
+        Assert.That((await RunAsync("plan-edit", "cli-edit")).Error, Does.Contain("nothing to change"));
+        Assert.That((await RunAsync("plan-edit", "cli-nothing", "--price", "x")).Status, Is.EqualTo(404));
+    }
+
+    [Test]
+    public async Task PlanDeleteRefusesAPlanInUse()
+    {
+        await CreatePlanAsync("cli-used");
+        await CreatePlanAsync("cli-unused");
+        await CreateAsync(planId: "cli-used");
+
+        var inUse = await RunAsync("plan-delete", "cli-used");
+        Assert.That(inUse.Status, Is.EqualTo(409));
+        Assert.That(inUse.Output, Does.Contain("mark it not for sale instead"));
+
+        Assert.That((await RunAsync("plan-delete", "cli-unused")).Status, Is.EqualTo(204));
+        Assert.That((await RunAsync("plan-delete", "cli-unused")).Status, Is.EqualTo(404));
+    }
+
+    [TestCase(new[] { "--name", "X", "--quota-bytes", "1", "--public-web-presence", "true" }, "usage: ./invites.sh plan-create", TestName = "plan-create without --id")]
+    [TestCase(new[] { "--id", "x", "--quota-bytes", "1", "--public-web-presence", "true" }, "usage: ./invites.sh plan-create", TestName = "plan-create without --name")]
+    [TestCase(new[] { "--id", "x", "--name", "X", "--public-web-presence", "true" }, "usage: ./invites.sh plan-create", TestName = "plan-create without --quota-bytes")]
+    [TestCase(new[] { "--id", "x", "--name", "X", "--quota-bytes", "1" }, "usage: ./invites.sh plan-create", TestName = "plan-create without --public-web-presence")]
+    [TestCase(new[] { "--id", "x", "--name", "X", "--quota-bytes", "1 TB", "--public-web-presence", "true" }, "--quota-bytes must be a number", TestName = "plan-create with a quota that is not a number")]
+    [TestCase(new[] { "--id", "x", "--name", "X", "--quota-bytes", "1", "--public-web-presence", "yes" }, "--public-web-presence must be true or false", TestName = "plan-create with a public page that is not true or false")]
+    [TestCase(new[] { "--id", "x", "--name", "X", "--quota-bytes", "1", "--public-web-presence", "true", "--bogus" }, "unknown option: --bogus", TestName = "plan-create with an unknown option")]
+    public async Task PlanCreateRefusesBadArguments(string[] arguments, string message)
+    {
+        var result = await RunAsync(["plan-create", .. arguments]);
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Error, Does.Contain(message));
+    }
+
+    [Test]
+    public async Task PlanCreateSaysWhatTheServiceRefuses()
+    {
+        var zero = await RunAsync("plan-create", "--id", "cli-zero", "--name", "Zero", "--quota-bytes", "0",
+            "--public-web-presence", "true");
+        Assert.That(zero.Status, Is.EqualTo(400));
+        Assert.That(zero.Output, Does.Contain("there is no unlimited"));
+
+        var taken = await RunAsync("plan-create", "--id", "VETERANS", "--name", "Again", "--quota-bytes", "1",
+            "--public-web-presence", "true");
+        Assert.That(taken.Status, Is.EqualTo(409));
+    }
+
+    [Test]
+    public async Task ACodeNeedsAnExistingPlan()
+    {
+        var result = await RunAsync("create", "--uses", "1", "--source", "cli", "--plan", "cli-no-such-plan");
+
+        Assert.That(result.Status, Is.EqualTo(400));
+        Assert.That(result.Output, Does.Contain("There is no plan 'cli-no-such-plan'"));
     }
 
     //
@@ -379,6 +479,17 @@ public class InvitesCliTests
     }
 
     //
+
+    // A plan, 1 TB with a public home page unless the options say otherwise
+    private async Task<Plan> CreatePlanAsync(string id, params string[] options)
+    {
+        List<string> arguments = ["plan-create", "--id", id];
+        if (!options.Contains("--name")) arguments.AddRange(["--name", id]);
+        if (!options.Contains("--quota-bytes")) arguments.AddRange(["--quota-bytes", "1099511627776"]);
+        if (!options.Contains("--public-web-presence")) arguments.AddRange(["--public-web-presence", "true"]);
+        var result = await RunAsync([.. arguments, .. options]);
+        return result.Json<Plan>();
+    }
 
     private async Task<InvitationCode> CreateAsync(int maxUses = 2, string? owner = null, string source = "cli-test",
         string planId = "free")

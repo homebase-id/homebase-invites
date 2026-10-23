@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
 namespace Odin.InvitationCodes.Hosting;
@@ -10,8 +9,9 @@ namespace Odin.InvitationCodes.Hosting;
 /// <param name="Source">Free text saying where the code came from</param>
 /// <param name="EnablePublicWebPresence">Whether an identity that signs up with the code gets a public home page, for
 /// identity hosts from before odin-core #1974. Later hosts ignore it: the plan decides. On unless set otherwise.</param>
-/// <param name="PlanId">The hosting plan (and so the quota) an identity that signs up with the code gets. Every code
-/// is made with one; null only on codes made before plans were required, which leave it to the identity host</param>
+/// <param name="PlanId">The hosting plan (and so the quota) an identity that signs up with the code gets: a plan in
+/// <see cref="PlanStore"/> when the code was made or last given one. Null only on codes made before plans were
+/// required, which leave it to the identity host</param>
 /// <param name="Disabled">A disabled code cannot be used, whatever uses it has left</param>
 public record InvitationCode(
     string Code,
@@ -297,6 +297,20 @@ public class InvitationCodeStore
     //
 
     /// <summary>
+    /// How many codes give this plan, whatever its case
+    /// </summary>
+    public async Task<int> CountWithPlanAsync(string planId)
+    {
+        await using var connection = await OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM invitation_codes WHERE plan_id = @planId COLLATE NOCASE;";
+        command.Parameters.AddWithValue("@planId", planId.Trim());
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    //
+
+    /// <summary>
     /// Counts codes and signups, in total, by source, by owner (codes without one are left out), by plan (codes
     /// without one together, under a null name) and by week.
     /// </summary>
@@ -405,9 +419,6 @@ public class InvitationCodeStore
             reader.GetBoolean(7));
     }
 
-    // A plan id is a name the identity hosts know, e.g. "free" or "pro-100gb"
-    private static readonly Regex PlanIdFormat = new(@"^[A-Za-z0-9._-]{1,64}$", RegexOptions.Compiled);
-
     private static void CheckMaxUses(int maxUses)
     {
         if (maxUses is < 1 or > MaxUsesLimit)
@@ -426,7 +437,7 @@ public class InvitationCodeStore
         {
             throw new InvalidInvitationCodeRequestException("planId is required");
         }
-        if (!PlanIdFormat.IsMatch(normalized))
+        if (!PlanIds.IsValid(normalized))
         {
             throw new InvalidInvitationCodeRequestException("Invalid planId");
         }

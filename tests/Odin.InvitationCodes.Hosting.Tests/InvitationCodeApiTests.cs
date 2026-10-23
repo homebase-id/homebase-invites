@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Data.Sqlite;
 
 namespace Odin.InvitationCodes.Hosting.Tests;
 
@@ -130,7 +131,9 @@ public class InvitationCodeApiTests
         var code = await _server.CreateCodeAsync(maxUses: 1);
 
         Assert.That(await ValidateAsync(code.Code.ToLowerInvariant().Replace("-", "")), Is.True);
-        Assert.That(await UseAsync(code.Code), Is.EqualTo(new UseResponse(true, code with { UsesLeft = 0 })));
+        Assert.That(await UseAsync(code.Code), Is.EqualTo(new UseResponse(true,
+            UsedInvitationCode.From(code with { UsesLeft = 0 }, null) with
+                { QuotaBytes = 64424509440, PublicWebPresence = true })));
         Assert.That(await ValidateAsync(code.Code), Is.False);
         Assert.That(await UseAsync(code.Code), Is.EqualTo(new UseResponse(false, null)));
     }
@@ -141,6 +144,69 @@ public class InvitationCodeApiTests
         var code = await _server.CreateCodeAsync(planId: "pro-100gb");
 
         Assert.That((await UseAsync(code.Code)).Code!.PlanId, Is.EqualTo("pro-100gb"));
+    }
+
+    [Test]
+    public async Task AUseCarriesWhatThePlanGives()
+    {
+        var code = await _server.CreateCodeAsync(planId: "tiny-test");
+
+        var used = (await UseAsync(code.Code)).Code!;
+
+        Assert.That((used.PlanId, used.QuotaBytes, used.PublicWebPresence), Is.EqualTo(("tiny-test", 1048576L, false)));
+    }
+
+    [Test]
+    public async Task AUseCarriesWhatThePlanGivesNow()
+    {
+        var code = await _server.CreateCodeAsync(planId: "tiny-test");
+        await _admin.PatchAsJsonAsync("/api/v1/plans/tiny-test", new { quotaBytes = 2097152, publicWebPresence = true });
+
+        var used = (await UseAsync(code.Code)).Code!;
+
+        Assert.That((used.QuotaBytes, used.PublicWebPresence), Is.EqualTo((2097152L, true)));
+    }
+
+    [TestCase("retired-plan", TestName = "a code whose plan is not here")]
+    [TestCase(null, TestName = "a code from before plans were required")]
+    public async Task ACodeFromBeforePlansWereHereCarriesItsPlanIdAlone(string? planId)
+    {
+        var code = await _server.CreateCodeAsync();
+        await using (var connection = new SqliteConnection($"Data Source={_server.DatabasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE invitation_codes SET plan_id = @planId;";
+            command.Parameters.AddWithValue("@planId", (object?)planId ?? DBNull.Value);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var used = (await UseAsync(code.Code)).Code!;
+
+        Assert.That((used.PlanId, used.QuotaBytes, used.PublicWebPresence), Is.EqualTo((planId, (long?)null, (bool?)null)),
+            "the identity host uses its defaults");
+    }
+
+    [Test]
+    public async Task ACodeNeedsAPlanThatExists()
+    {
+        var created = await _admin.PostAsJsonAsync(Root + "/", new CreateRequest(null, 1, "x", true, "gold"));
+        Assert.That(created.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(await created.Content.ReadAsStringAsync(), Does.Contain("There is no plan 'gold'"));
+
+        var code = await _server.CreateCodeAsync();
+        var edited = await RawPatchAsync(code.Code, new { planId = "gold" });
+        Assert.That(edited.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That((await _admin.GetFromJsonAsync<List<InvitationCode>>(Root + "/"))!.Single().PlanId, Is.EqualTo("free"));
+    }
+
+    [Test]
+    public async Task ACodeTakesThePlansOwnId()
+    {
+        var code = await _server.CreateCodeAsync(planId: "VETERANS");
+
+        Assert.That(code.PlanId, Is.EqualTo("veterans"));
+        Assert.That((await PatchAsync(code.Code, new { planId = "Tiny-Test" }))!.PlanId, Is.EqualTo("tiny-test"));
     }
 
     [Test]

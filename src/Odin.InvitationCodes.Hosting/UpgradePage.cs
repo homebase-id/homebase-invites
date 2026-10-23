@@ -59,8 +59,9 @@ public class UpgradeSession(IDataProtectionProvider dataProtection)
 /// <summary>
 /// The page where an owner gets a bigger plan (README, "Upgrade page"). The owner console sends them to
 /// <c>/upgrade?id=&lt;identity&gt;&amp;host=&lt;provisioning domain&gt;</c>; they sign in with YouAuth, then go
-/// through four steps: choose a plan, confirm it, a test checkout, and done. The checkout is a stand-in for
-/// payment: completing it makes a purchase grant, which sets the plan on the identity's host.
+/// through four steps: choose a plan (from the plans marked for sale), confirm it, a test checkout, and done. The
+/// checkout is a stand-in for payment: completing it makes a purchase grant, which sets the plan, and what it gives,
+/// on the identity's host.
 /// </summary>
 public static class UpgradePage
 {
@@ -85,7 +86,8 @@ public static class UpgradePage
         // Step 1, choose. id and host are hints anyone can write into a link: id only says whom to sign in, host is
         // used only if it is a host this service knows
         page.MapGet("", async (HttpContext context, string? id, string? host, UpgradeOptions options,
-            UpgradeSession session, YouAuthLogin login, PlanService plans, PlanHosts hosts, IAntiforgery antiforgery) =>
+            UpgradeSession session, YouAuthLogin login, PlanService plans, PlanStore planStore, PlanHosts hosts,
+            IAntiforgery antiforgery) =>
         {
             if (!options.Enabled)
             {
@@ -109,7 +111,8 @@ public static class UpgradePage
             if (signedIn != null && (requested == null || requested == signedIn.Identity))
             {
                 var located = await LocateAsync(context, signedIn with { Host = signedIn.Host ?? hint }, session, plans);
-                return located.Error ?? ChoosePage(context, located.SignedIn!, located.PlanId, options, antiforgery);
+                return located.Error ?? await ChoosePageAsync(context, located.SignedIn!, located.PlanId, planStore,
+                    antiforgery);
             }
 
             if (requested == null)
@@ -144,7 +147,7 @@ public static class UpgradePage
 
         // Step 2, confirm
         page.MapGet("/confirm", async (HttpContext context, string? plan, UpgradeOptions options,
-            UpgradeSession session, PlanService plans) =>
+            UpgradeSession session, PlanService plans, PlanStore planStore) =>
         {
             if (!options.Enabled)
             {
@@ -157,7 +160,7 @@ public static class UpgradePage
                 return SessionEnded();
             }
 
-            var chosen = options.ForSale(plan);
+            var chosen = await ForSaleAsync(planStore, plan);
             if (chosen == null)
             {
                 return NotForSale();
@@ -169,14 +172,14 @@ public static class UpgradePage
                 return located.Error;
             }
 
-            var current = PlanName(options, located.PlanId);
+            var current = await PlanNameAsync(planStore, located.PlanId);
             var html = new StringBuilder();
             html.Append(StepsBar(1));
             html.Append($"""
                          <div class="card">
                          <p class="muted">Change your plan from <strong>{Encode(current)}</strong> to</p>
                          <h2>{Encode(chosen.Name)}</h2>
-                         {Description(chosen)}
+                         {Details(chosen)}
                          </div>
                          <div class="actions">
                          <a class="button" href="{Root}/checkout?plan={Uri.EscapeDataString(chosen.Id)}">Continue to checkout</a>
@@ -187,8 +190,8 @@ public static class UpgradePage
         });
 
         // Step 3, a test checkout: the card fields have no names, so the browser never sends them anywhere
-        page.MapGet("/checkout", (HttpContext context, string? plan, UpgradeOptions options, UpgradeSession session,
-            IAntiforgery antiforgery) =>
+        page.MapGet("/checkout", async (HttpContext context, string? plan, UpgradeOptions options,
+            UpgradeSession session, PlanStore planStore, IAntiforgery antiforgery) =>
         {
             if (!options.Enabled)
             {
@@ -201,7 +204,7 @@ public static class UpgradePage
                 return SessionEnded();
             }
 
-            var chosen = options.ForSale(plan);
+            var chosen = await ForSaleAsync(planStore, plan);
             if (chosen == null)
             {
                 return NotForSale();
@@ -214,7 +217,7 @@ public static class UpgradePage
                          <div class="card">
                          <p class="muted">Order summary</p>
                          <h2>{Encode(chosen.Name)}</h2>
-                         {Description(chosen)}
+                         {Details(chosen)}
                          <p class="muted">For {Encode(signedIn.Identity)}</p>
                          </div>
                          <form method="post" action="{Root}/checkout" class="card checkout">
@@ -238,7 +241,7 @@ public static class UpgradePage
         // Completing the test checkout makes a purchase grant, which sets the plan on the identity's host. Only
         // planId is read; anything else in the form is ignored
         page.MapPost("/checkout", async (HttpContext context, [FromForm] string? planId, UpgradeOptions options,
-            UpgradeSession session, PlanService plans) =>
+            UpgradeSession session, PlanService plans, PlanStore planStore) =>
         {
             if (!options.Enabled)
             {
@@ -251,7 +254,7 @@ public static class UpgradePage
                 return SessionEnded();
             }
 
-            var plan = options.ForSale(planId);
+            var plan = await ForSaleAsync(planStore, planId);
             if (plan == null)
             {
                 return NotForSale();
@@ -267,9 +270,9 @@ public static class UpgradePage
             return Results.Redirect($"{Root}/done?grant={grant.Id}");
         });
 
-        // Step 4, done: only the signed-in identity's own purchases
+        // Step 4, done: only the signed-in identity's own purchases. The plan is named even if it is no longer for sale
         page.MapGet("/done", async (HttpContext context, long? grant, UpgradeOptions options, UpgradeSession session,
-            PlanGrantStore grants) =>
+            PlanGrantStore grants, PlanStore planStore) =>
         {
             if (!options.Enabled)
             {
@@ -288,14 +291,14 @@ public static class UpgradePage
                 return Page(StatusCodes.Status404NotFound, "Not found", P("We could not find that purchase."));
             }
 
-            var plan = options.ForSale(purchase.PlanId);
+            var plan = await planStore.GetAsync(purchase.PlanId);
             var name = plan?.Name ?? purchase.PlanId;
             var html = new StringBuilder();
             html.Append(StepsBar(3));
             html.Append("<div class=\"card\">");
             html.Append(purchase.Status switch
             {
-                PlanGrantStatus.Applied => $"<h2>You're on {Encode(name)}</h2>" + (plan == null ? "" : Description(plan)),
+                PlanGrantStatus.Applied => $"<h2>You're on {Encode(name)}</h2>" + (plan == null ? "" : Details(plan)),
                 PlanGrantStatus.Pending => $"<h2>Thank you</h2>" +
                                            P($"Your purchase of {name} is recorded; your plan will change shortly."),
                 _ => "<h2>Something went wrong</h2>" +
@@ -346,27 +349,27 @@ public static class UpgradePage
         return new Located(signedIn, located.PlanId, null);
     }
 
-    private static IResult ChoosePage(HttpContext context, UpgradeSession.Data signedIn, string? planId,
-        UpgradeOptions options, IAntiforgery antiforgery)
+    private static async Task<IResult> ChoosePageAsync(HttpContext context, UpgradeSession.Data signedIn,
+        string? planId, PlanStore planStore, IAntiforgery antiforgery)
     {
         var html = new StringBuilder();
         html.Append(StepsBar(0));
         html.Append($"""<p class="muted">Signed in as <strong>{Encode(signedIn.Identity)}</strong></p>""");
 
-        var currentForSale = options.PlansForSale.Any(p => SamePlan(p.Id, planId));
-        if (!currentForSale)
+        var forSale = (await planStore.ListAsync()).Where(p => p.ForSale).ToList();
+        if (!forSale.Any(p => SamePlan(p.Id, planId)))
         {
-            html.Append($"""<p>Your plan: <strong>{Encode(planId ?? "none")}</strong></p>""");
+            html.Append($"""<p>Your plan: <strong>{Encode(await PlanNameAsync(planStore, planId))}</strong></p>""");
         }
 
-        if (options.PlansForSale.Count == 0)
+        if (forSale.Count == 0)
         {
             html.Append(P("There are no plans for sale right now."));
         }
         else
         {
             html.Append("<ul class=\"plans\">");
-            foreach (var plan in options.PlansForSale)
+            foreach (var plan in forSale)
             {
                 var isCurrent = SamePlan(plan.Id, planId);
                 html.Append(isCurrent ? "<li class=\"card current\">" : "<li class=\"card\">");
@@ -375,7 +378,7 @@ public static class UpgradePage
                     html.Append("<p class=\"badge\">Your plan</p>");
                 }
                 html.Append($"<h2>{Encode(plan.Name)}</h2>");
-                html.Append(Description(plan));
+                html.Append(Details(plan));
                 if (!isCurrent)
                 {
                     html.Append($"""<a class="button" href="{Root}/confirm?plan={Uri.EscapeDataString(plan.Id)}">Choose {Encode(plan.Name)}</a>""");
@@ -391,10 +394,31 @@ public static class UpgradePage
 
     private static bool SamePlan(string a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    private static string PlanName(UpgradeOptions options, string? planId) =>
-        options.ForSale(planId)?.Name ?? planId ?? "none";
+    // The plan, if it is one for sale; null otherwise
+    private static async Task<Plan?> ForSaleAsync(PlanStore planStore, string? planId) =>
+        await planStore.GetAsync(planId) is { ForSale: true } plan ? plan : null;
 
-    private static string Description(PlanForSale plan) => plan.Description == "" ? "" : P(plan.Description);
+    // The plan's name; its Id when it is not a plan here
+    private static async Task<string> PlanNameAsync(PlanStore planStore, string? planId) =>
+        (await planStore.GetAsync(planId))?.Name ?? planId ?? "none";
+
+    // The description, then what the plan gives, then its price when it has one
+    private static string Details(Plan plan)
+    {
+        var html = new StringBuilder();
+        if (plan.Description != "")
+        {
+            html.Append(P(plan.Description));
+        }
+        html.Append($"""<ul class="gives"><li>{Encode(plan.Storage)} of storage</li>""");
+        html.Append(plan.PublicWebPresence ? "<li>A public home page</li>" : "<li>No public home page</li>");
+        html.Append("</ul>");
+        if (plan.Price != "")
+        {
+            html.Append($"""<p class="price">{Encode(plan.Price)}</p>""");
+        }
+        return html.ToString();
+    }
 
     private static string AntiforgeryField(HttpContext context, IAntiforgery antiforgery)
     {
@@ -449,6 +473,8 @@ public static class UpgradePage
           ul.plans .card { display: flex; flex-direction: column; margin: 0; }
           ul.plans .card .button { margin-top: auto; align-self: flex-start; }
           .card.current { border: 2px solid var(--brand); background: var(--soft); }
+          ul.gives { margin: .25rem 0 .75rem; padding-left: 1.25rem; }
+          .price { font-weight: 600; }
           .badge { display: inline-block; font-size: .8rem; font-weight: 600; color: var(--brand); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 .5rem; }
           .banner { background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; border-radius: .5rem; padding: .75rem 1rem; }
           .checkout label { display: block; font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }

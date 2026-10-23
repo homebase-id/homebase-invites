@@ -7,6 +7,9 @@ namespace Odin.InvitationCodes.Hosting;
 /// A plan an identity is owed: by a code, a purchase, or an admin. The service sets it on the identity host that
 /// serves the identity, and retries until that host has it.
 /// </summary>
+/// <param name="QuotaBytes">The plan's quota when the grant was made, sent to the host with the plan; null on grants
+/// made before plans were kept here, which send the plan Id alone</param>
+/// <param name="PublicWebPresence">The plan's public web presence when the grant was made; null like QuotaBytes</param>
 /// <param name="Host">The provisioning domain of the host the plan was set on; null until it was</param>
 /// <param name="HostHint">The host the request said the identity is on; tried first, if it is a known host</param>
 /// <param name="Source">Why the identity is owed it: <c>code</c>, <c>purchase</c> or <c>admin</c></param>
@@ -19,6 +22,8 @@ public record PlanGrant(
     long Id,
     string Identity,
     string PlanId,
+    long? QuotaBytes,
+    bool? PublicWebPresence,
     string Source,
     string Reference,
     string Status,
@@ -50,7 +55,8 @@ public static class PlanGrantSource
 }
 
 /// <summary>
-/// A grant request the store refuses: a bad identity, plan, source, reference or host. The API answers 400.
+/// A grant request the store refuses: a bad identity, source, reference or host, or a plan that does not exist. The
+/// API answers 400.
 /// </summary>
 public class InvalidPlanGrantRequestException(string message) : InvalidInvitationCodeRequestException(message);
 
@@ -83,16 +89,15 @@ public class PlanGrantStore
     //
 
     /// <summary>
-    /// Makes a pending grant, or returns the one already made with this reference. A reference reused for another
-    /// identity or plan is refused.
+    /// Makes a pending grant of the plan with what it gives now, or returns the one already made with this
+    /// reference. A reference reused for another identity or plan is refused.
     /// </summary>
     /// <returns>The grant, and whether this call made it</returns>
-    public async Task<(PlanGrant Grant, bool Created)> CreateAsync(string? identity, string? planId, string? source,
+    public async Task<(PlanGrant Grant, bool Created)> CreateAsync(string? identity, Plan plan, string? source,
         string? reference, string? hostHint, long now)
     {
         var normalizedIdentity = DomainNames.Normalize(identity) ??
                                  throw new InvalidPlanGrantRequestException("Invalid identity");
-        var normalizedPlanId = NormalizePlanId(planId);
         var normalizedSource = string.IsNullOrWhiteSpace(source) ? PlanGrantSource.Admin : source.Trim().ToLowerInvariant();
         if (!PlanGrantSource.All.Contains(normalizedSource))
         {
@@ -115,14 +120,17 @@ public class PlanGrantStore
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO plan_grants (identity, plan_id, source, reference, status, host_hint, attempts, next_attempt_at,
-                                     created_at, updated_at)
-            VALUES (@identity, @planId, @source, @reference, 'pending', @hostHint, 0, @now, @now, @now)
+            INSERT INTO plan_grants (identity, plan_id, quota_bytes, public_web_presence, source, reference, status,
+                                     host_hint, attempts, next_attempt_at, created_at, updated_at)
+            VALUES (@identity, @planId, @quotaBytes, @publicWebPresence, @source, @reference, 'pending', @hostHint, 0,
+                    @now, @now, @now)
             ON CONFLICT (reference) DO NOTHING;
             SELECT changes();
             """;
         command.Parameters.AddWithValue("@identity", normalizedIdentity);
-        command.Parameters.AddWithValue("@planId", normalizedPlanId);
+        command.Parameters.AddWithValue("@planId", plan.Id);
+        command.Parameters.AddWithValue("@quotaBytes", plan.QuotaBytes);
+        command.Parameters.AddWithValue("@publicWebPresence", plan.PublicWebPresence);
         command.Parameters.AddWithValue("@source", normalizedSource);
         command.Parameters.AddWithValue("@reference", normalizedReference);
         command.Parameters.AddWithValue("@hostHint", (object?)normalizedHint ?? DBNull.Value);
@@ -130,7 +138,7 @@ public class PlanGrantStore
         var created = Convert.ToInt64(await command.ExecuteScalarAsync()) == 1;
 
         var grant = (await GetByReferenceAsync(connection, normalizedReference))!;
-        if (!created && (grant.Identity != normalizedIdentity || grant.PlanId != normalizedPlanId))
+        if (!created && (grant.Identity != normalizedIdentity || !string.Equals(grant.PlanId, plan.Id, StringComparison.OrdinalIgnoreCase)))
         {
             throw new PlanGrantConflictException(
                 $"Reference {normalizedReference} is already a grant of {grant.PlanId} to {grant.Identity}");
@@ -213,6 +221,18 @@ public class PlanGrantStore
         return await ReadAllAsync(command);
     }
 
+    /// <summary>
+    /// How many grants are of this plan, whatever its case
+    /// </summary>
+    public async Task<int> CountWithPlanAsync(string planId)
+    {
+        await using var connection = await OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM plan_grants WHERE plan_id = @planId COLLATE NOCASE;";
+        command.Parameters.AddWithValue("@planId", planId.Trim());
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
     //
 
     public Task<PlanGrant?> MarkAppliedAsync(long id, string host, long now) =>
@@ -285,26 +305,13 @@ public class PlanGrantStore
 
     private const string Select =
         """
-        SELECT id, identity, plan_id, source, reference, status, host, host_hint, attempts, last_error, next_attempt_at,
+        SELECT id, identity, plan_id, quota_bytes, public_web_presence, source, reference, status, host, host_hint, attempts, last_error, next_attempt_at,
                created_at, updated_at, applied_at
         FROM plan_grants
         """;
 
-    // A plan id is a name the identity hosts know, e.g. "free" or "pro-100gb"
-    private static readonly Regex PlanIdFormat = new(@"^[A-Za-z0-9._-]{1,64}$", RegexOptions.Compiled);
-
     // The caller's id, e.g. a payment provider's: printable, no spaces, not too long
     private static readonly Regex ReferenceFormat = new(@"^[A-Za-z0-9._:-]{1,128}$", RegexOptions.Compiled);
-
-    private static string NormalizePlanId(string? planId)
-    {
-        var normalized = planId?.Trim();
-        if (string.IsNullOrEmpty(normalized))
-        {
-            throw new InvalidPlanGrantRequestException("planId is required");
-        }
-        return PlanIdFormat.IsMatch(normalized) ? normalized : throw new InvalidPlanGrantRequestException("Invalid planId");
-    }
 
     private async Task<PlanGrant?> UpdateAsync(long id, string set, long now, params (string Name, object Value)[] parameters)
     {
@@ -350,22 +357,25 @@ public class PlanGrantStore
     {
         string? Text(int i) => reader.IsDBNull(i) ? null : reader.GetString(i);
         long? Number(int i) => reader.IsDBNull(i) ? null : reader.GetInt64(i);
+        bool? Flag(int i) => reader.IsDBNull(i) ? null : reader.GetBoolean(i);
 
         return new PlanGrant(
             reader.GetInt64(0),
             reader.GetString(1),
             reader.GetString(2),
-            reader.GetString(3),
-            reader.GetString(4),
+            Number(3),
+            Flag(4),
             reader.GetString(5),
-            Text(6),
-            Text(7),
-            reader.GetInt32(8),
+            reader.GetString(6),
+            reader.GetString(7),
+            Text(8),
             Text(9),
-            Number(10),
-            reader.GetInt64(11),
-            reader.GetInt64(12),
-            Number(13));
+            reader.GetInt32(10),
+            Text(11),
+            Number(12),
+            reader.GetInt64(13),
+            reader.GetInt64(14),
+            Number(15));
     }
 
     private async Task<SqliteConnection> OpenAsync()
@@ -408,6 +418,8 @@ public class PlanGrantStore
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     identity TEXT NOT NULL,
                     plan_id TEXT NOT NULL,
+                    quota_bytes INTEGER NULL,
+                    public_web_presence INTEGER NULL,
                     source TEXT NOT NULL,
                     reference TEXT NOT NULL UNIQUE,
                     status TEXT NOT NULL,
@@ -430,11 +442,28 @@ public class PlanGrantStore
                 """;
             await command.ExecuteNonQueryAsync();
 
+            // Grants made before plans were kept here lack what the plan gave
+            await AddColumnIfMissingAsync(connection, "quota_bytes", "INTEGER NULL");
+            await AddColumnIfMissingAsync(connection, "public_web_presence", "INTEGER NULL");
+
             _initialized = true;
         }
         finally
         {
             _initializeLock.Release();
+        }
+    }
+
+    private static async Task AddColumnIfMissingAsync(SqliteConnection connection, string column, string definition)
+    {
+        await using var columns = connection.CreateCommand();
+        columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('plan_grants') WHERE name = @column;";
+        columns.Parameters.AddWithValue("@column", column);
+        if (Convert.ToInt64(await columns.ExecuteScalarAsync()) == 0)
+        {
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE plan_grants ADD COLUMN {column} {definition};";
+            await alter.ExecuteNonQueryAsync();
         }
     }
 }

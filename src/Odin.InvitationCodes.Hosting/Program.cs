@@ -9,8 +9,9 @@ using Odin.InvitationCodes.Hosting;
 
 // The invitation-code service (#1908): holds the codes and counts their uses. The identity hosts call it with
 // the signup key to check and use a code at signup; admins call it with the create key to create and list.
-// It also grants plans: it sets the plan an identity is owed on the identity host that serves it, with the plan
-// key (README, "Plan grants"). Owners buy bigger plans on the upgrade page, after signing in with YouAuth (README,
+// It holds the hosting plans, which admins manage with the create key (README, "Plans"), and grants them: it sets
+// the plan an identity is owed, and what the plan gives, on the identity host that serves it, with the plan key
+// (README, "Plan grants"). Owners buy bigger plans on the upgrade page, after signing in with YouAuth (README,
 // "Upgrade page").
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,10 +23,13 @@ var createApiKey = Required("InvitationCodes:CreateApiKey");
 var requestsPerMinute = builder.Configuration.GetValue("InvitationCodes:RequestsPerMinutePerIp", 300);
 
 var store = new InvitationCodeStore(databasePath);
+var planStore = new PlanStore(databasePath);
+var grantStore = new PlanGrantStore(databasePath);
+builder.Services.AddSingleton(planStore);
 
 var planHosts = PlanHosts.FromConfiguration(builder.Configuration);
 builder.Services.AddSingleton(planHosts);
-builder.Services.AddSingleton(new PlanGrantStore(databasePath));
+builder.Services.AddSingleton(grantStore);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PlanService>();
 builder.Services.AddHostedService<PlanGrantWorker>();
@@ -94,10 +98,23 @@ signup.MapPost("/validate", async (CodeRequest request) =>
     return new ValidateResponse(code is { UsesLeft: > 0, Disabled: false });
 });
 
-signup.MapPost("/use", async (CodeRequest request) =>
+// The code comes back with what its plan gives now, which the identity host stores on the new identity. A code whose
+// plan is not here (made before plans were) carries its plan Id alone, and the host uses its defaults.
+signup.MapPost("/use", async (CodeRequest request, ILogger<Program> logger) =>
 {
     var code = await store.TryUseAsync(request.Code);
-    return new UseResponse(code != null, code);
+    if (code == null)
+    {
+        return new UseResponse(false, null);
+    }
+
+    var plan = await planStore.GetAsync(code.PlanId);
+    if (plan == null && code.PlanId != null)
+    {
+        logger.LogWarning("Code {code} was used with plan {planId}, which is not a plan here: the identity host " +
+                          "gives its default quota (invites.sh plan-create)", code.Code, code.PlanId);
+    }
+    return new UseResponse(true, UsedInvitationCode.From(code, plan));
 });
 
 signup.MapPost("/undo-use", async (CodeRequest request) =>
@@ -114,7 +131,7 @@ var admin = root.MapGroup("").WithMetadata(new ApiKey(createApiKey));
 
 admin.MapPost("/", async (CreateRequest request) =>
     await store.CreateAsync(request.Owner, request.MaxUses, request.Source, request.EnablePublicWebPresence ?? true,
-        request.PlanId));
+        await ExistingPlanIdAsync(request.PlanId)));
 
 admin.MapGet("/", async (string? owner) => await store.ListAsync(owner));
 
@@ -132,7 +149,58 @@ admin.MapGet("/stats", async (int? sinceDays) =>
 
 // Change a code, or disable or enable it. Fields left out stay as they are; "owner": "" removes the owner.
 admin.MapPatch("/{code}", async (string code, InvitationCodeChange change) =>
-    await store.UpdateAsync(code, change) is { } updated ? Results.Ok(updated) : Results.NotFound());
+    await store.UpdateAsync(code, change with { PlanId = await ExistingPlanIdAsync(change.PlanId) }) is { } updated
+        ? Results.Ok(updated)
+        : Results.NotFound());
+
+//
+// Plans, create key: admins
+//
+
+var plansApi = app.MapGroup(PlanApi.Root)
+    .AddEndpointFilter(InvitationCodeApi.BadRequestOnInvalid)
+    .WithMetadata(new ApiKey(createApiKey));
+
+plansApi.MapPost("/", async (PlanRequest request) =>
+{
+    try
+    {
+        return Results.Ok(await planStore.CreateAsync(request));
+    }
+    catch (PlanConflictException e)
+    {
+        return Results.Conflict(e.Message);
+    }
+});
+
+plansApi.MapGet("/", async () => await planStore.ListAsync());
+
+plansApi.MapGet("/{id}", async (string id) =>
+    await planStore.GetAsync(id) is { } plan ? Results.Ok(plan) : Results.NotFound());
+
+// Fields left out stay as they are. Identities already on the plan keep what they were given.
+plansApi.MapPatch("/{id}", async (string id, PlanChange change) =>
+    await planStore.UpdateAsync(id, change) is { } plan ? Results.Ok(plan) : Results.NotFound());
+
+// Only a plan no code or grant uses; to retire one in use, mark it not for sale
+plansApi.MapDelete("/{id}", async (string id) =>
+{
+    if (await planStore.GetAsync(id) is not { } plan)
+    {
+        return Results.NotFound();
+    }
+
+    var codes = await store.CountWithPlanAsync(plan.Id);
+    var grants = await grantStore.CountWithPlanAsync(plan.Id);
+    if (codes > 0 || grants > 0)
+    {
+        return Results.Conflict($"Plan {plan.Id} is used by {codes} code(s) and {grants} grant(s); " +
+                                "mark it not for sale instead");
+    }
+
+    await planStore.DeleteAsync(plan.Id);
+    return Results.NoContent();
+});
 
 //
 // Plan grants, create key: admins now, the payment flow later (as purchase grants)
@@ -167,6 +235,19 @@ grants.MapPost("/{id:long}/retry", async (long id, PlanService plans, PlanGrantS
 
 app.Run();
 
+// A code's plan must be one of the plans here; returns its Id as the plan has it. Empty or malformed Ids are left
+// for the store to refuse with its own message.
+async Task<string?> ExistingPlanIdAsync(string? planId)
+{
+    if (string.IsNullOrWhiteSpace(planId) || !PlanIds.IsValid(planId.Trim()))
+    {
+        return planId;
+    }
+    return (await planStore.GetAsync(planId))?.Id ??
+           throw new InvalidInvitationCodeRequestException(
+               $"There is no plan '{planId.Trim()}'; create it first (invites.sh plan-create)");
+}
+
 string Required(string key)
 {
     var value = builder.Configuration[key];
@@ -183,7 +264,30 @@ public record ValidateResponse(bool Valid);
 /// <param name="Reference">The caller's id for it, e.g. a payment id; made up when left out</param>
 /// <param name="Host">The provisioning domain of the host the identity is on, if known; a hint, tried first</param>
 public record GrantRequest(string? Identity, string? PlanId, string? Source, string? Reference, string? Host);
-public record UseResponse(bool Used, InvitationCode? Code);
+public record UseResponse(bool Used, UsedInvitationCode? Code);
+
+/// <summary>
+/// A code just used, with what its plan gives now, for the identity host to store on the new identity
+/// (odin-core <c>InvitationCodeUse</c>)
+/// </summary>
+/// <param name="QuotaBytes">The plan's quota; null when the code's plan is not here, and the host uses its default</param>
+/// <param name="PublicWebPresence">The plan's public web presence; null like QuotaBytes</param>
+public record UsedInvitationCode(
+    string Code,
+    string? Owner,
+    string Source,
+    bool EnablePublicWebPresence,
+    string? PlanId,
+    int MaxUses,
+    int UsesLeft,
+    bool Disabled,
+    long? QuotaBytes,
+    bool? PublicWebPresence)
+{
+    public static UsedInvitationCode From(InvitationCode code, Plan? plan) => new(code.Code, code.Owner, code.Source,
+        code.EnablePublicWebPresence, code.PlanId, code.MaxUses, code.UsesLeft, code.Disabled, plan?.QuotaBytes,
+        plan?.PublicWebPresence);
+}
 
 public partial class Program;
 
@@ -196,6 +300,11 @@ internal sealed class ApiKey(string key)
 
     public bool Matches(string presented) =>
         CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), _expected);
+}
+
+internal static class PlanApi
+{
+    public const string Root = "/api/v1/plans";
 }
 
 internal static class PlanGrantApi

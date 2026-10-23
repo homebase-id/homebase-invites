@@ -1,11 +1,13 @@
 using System.Net;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Odin.InvitationCodes.Hosting.Tests;
 
 /// <summary>
-/// Granting plans: finding the host that serves an identity, setting the plan there, and what a grant becomes on
-/// each answer; retries and the daily reconcile. Against a temp database and <see cref="FakeIdentityHosts"/>.
+/// Granting plans: finding the host that serves an identity, setting the plan and what it gives there, and what a
+/// grant becomes on each answer; retries and the daily reconcile. Against a temp database with the test server's
+/// plans, and <see cref="FakeIdentityHosts"/>.
 /// </summary>
 public class PlanServiceTests
 {
@@ -16,18 +18,24 @@ public class PlanServiceTests
 
     private string _path = null!;
     private PlanGrantStore _store = null!;
+    private PlanStore _planStore = null!;
     private FakeIdentityHosts _hosts = null!;
     private ManualTime _time = null!;
     private PlanService _plans = null!;
 
     [SetUp]
-    public void SetUp()
+    public async Task SetUp()
     {
         _path = TempDatabase.NewPath();
         _store = new PlanGrantStore(_path);
+        _planStore = new PlanStore(_path);
+        foreach (var plan in InvitationCodeServer.Plans)
+        {
+            await _planStore.CreateAsync(plan);
+        }
         _hosts = new FakeIdentityHosts();
         _time = new ManualTime();
-        _plans = new PlanService(_store, new PlanHosts([One, Two, Three], FakeIdentityHosts.PlanKey),
+        _plans = new PlanService(_store, _planStore, new PlanHosts([One, Two, Three], FakeIdentityHosts.PlanKey),
             new SingleHandlerFactory(_hosts), _time, NullLogger<PlanService>.Instance);
     }
 
@@ -129,12 +137,70 @@ public class PlanServiceTests
     }
 
     [Test]
-    public async Task APlanTheHostDoesNotHaveFails()
+    public async Task AGrantSendsWhatThePlanGives()
+    {
+        _hosts.Serve(Two, Frodo, "free", publicWebPresence: false);
+
+        var grant = await _plans.GrantAsync(Frodo, "veterans", "purchase", "pay_7", null);
+
+        Assert.That(grant.QuotaBytes, Is.EqualTo(1099511627776));
+        Assert.That(grant.PublicWebPresence, Is.True);
+        var put = _hosts.LastPut();
+        Assert.That(put.GetProperty("planId").GetString(), Is.EqualTo("veterans"));
+        Assert.That(put.GetProperty("quotaBytes").GetInt64(), Is.EqualTo(1099511627776));
+        Assert.That(put.GetProperty("publicWebPresence").GetBoolean(), Is.True);
+        Assert.That(put.GetProperty("reference").GetString(), Is.EqualTo("pay_7"));
+        Assert.That(_hosts.On(Two, Frodo), Is.EqualTo(new FakeIdentityHosts.Identity("veterans", 1099511627776, true)));
+    }
+
+    [Test]
+    public async Task AGrantKeepsWhatThePlanGaveWhenItWasMade()
+    {
+        _hosts.Serve(Two, Frodo);
+        var grant = await _plans.GrantAsync(Frodo, "VETERANS", null, null, null);
+
+        await _planStore.UpdateAsync("veterans", new PlanChange(QuotaBytes: 2199023255552));
+
+        Assert.That(grant.PlanId, Is.EqualTo("veterans"), "the plan's own Id, whatever the case asked for");
+        Assert.That((await _store.GetAsync(grant.Id))!.QuotaBytes, Is.EqualTo(1099511627776));
+        Assert.That(await _plans.ReconcileAsync(), Is.Empty, "the identity has what its grant gave");
+    }
+
+    [Test]
+    public void AGrantOfAPlanThatDoesNotExistIsRefused()
     {
         _hosts.Serve(One, Frodo);
-        _hosts.PlansOnHost[One] = ["free", "veterans"];
 
-        var grant = await _plans.GrantAsync(Frodo, "gold", null, null, null);
+        var refused = Assert.ThrowsAsync<InvalidPlanGrantRequestException>(() =>
+            _plans.GrantAsync(Frodo, "gold", null, null, null));
+
+        Assert.That(refused!.Message, Does.Contain("There is no plan 'gold'"));
+        Assert.That(_hosts.Requests, Is.Empty, "no host was called");
+    }
+
+    [Test]
+    public async Task AGrantFromBeforePlansWereKeptHereSendsThePlanIdAlone()
+    {
+        var grant = await _plans.GrantAsync(Frodo, "veterans", null, null, null);
+        await ForgetWhatThePlanGaveAsync(grant.Id);
+        _hosts.Serve(One, Frodo, "free", quotaBytes: 5368709120, publicWebPresence: false);
+
+        Assert.That((await _plans.RetryAsync(grant.Id))!.Status, Is.EqualTo(PlanGrantStatus.Applied));
+
+        var put = _hosts.LastPut();
+        Assert.That(put.TryGetProperty("quotaBytes", out _), Is.False);
+        Assert.That(put.TryGetProperty("publicWebPresence", out _), Is.False);
+        Assert.That(_hosts.On(One, Frodo), Is.EqualTo(new FakeIdentityHosts.Identity("veterans", 5368709120, false)),
+            "the host keeps the identity's own");
+    }
+
+    [Test]
+    public async Task APlanTheHostRefusesFails()
+    {
+        _hosts.Serve(One, Frodo);
+        _hosts.RefusesPlans[One] = "quotaBytes must be more than 0";
+
+        var grant = await _plans.GrantAsync(Frodo, "veterans", null, null, null);
 
         Assert.That(grant.Status, Is.EqualTo(PlanGrantStatus.Failed));
         Assert.That(grant.LastError, Does.Contain("refused the plan"));
@@ -234,11 +300,11 @@ public class PlanServiceTests
     public async Task RetryTriesAFailedGrantAgain()
     {
         _hosts.Serve(One, Frodo);
-        _hosts.PlansOnHost[One] = ["free"];
+        _hosts.RefusesPlans[One] = "no";
         var grant = await _plans.GrantAsync(Frodo, "veterans", null, null, null);
         Assert.That(grant.Status, Is.EqualTo(PlanGrantStatus.Failed));
 
-        _hosts.PlansOnHost[One].Add("veterans");
+        _hosts.RefusesPlans.Clear();
         var retried = await _plans.RetryAsync(grant.Id);
 
         Assert.That(retried!.Status, Is.EqualTo(PlanGrantStatus.Applied));
@@ -267,6 +333,46 @@ public class PlanServiceTests
         Assert.That(_hosts.PlanOn(Two, "sam.dotyou.cloud"), Is.EqualTo("veterans"));
     }
 
+    [TestCase(1048576L, true, TestName = "ReconcileSetsBackADriftedQuota")]
+    [TestCase(1099511627776L, false, TestName = "ReconcileSetsBackADriftedPublicHomePage")]
+    public async Task ReconcileSetsBackWhatThePlanGave(long quotaBytes, bool publicWebPresence)
+    {
+        _hosts.Serve(Two, Frodo);
+        await _plans.GrantAsync(Frodo, "veterans", null, null, null);
+
+        _hosts.Serve(Two, Frodo, "veterans", quotaBytes, publicWebPresence); // changed by hand on the host
+
+        Assert.That(await _plans.ReconcileAsync(), Is.EqualTo(new[] { Frodo }));
+        Assert.That(_hosts.On(Two, Frodo), Is.EqualTo(new FakeIdentityHosts.Identity("veterans", 1099511627776, true)));
+    }
+
+    [Test]
+    public async Task ReconcileComparesAHostFromBeforeOdinCore1994ByPlanIdAlone()
+    {
+        _hosts.Serve(Two, Frodo);
+        _hosts.Old.Add(Two);
+        await _plans.GrantAsync(Frodo, "veterans", null, null, null);
+        _hosts.Requests.Clear();
+
+        Assert.That(await _plans.ReconcileAsync(), Is.Empty, "it does not say its quota, so that is not a drift");
+        Assert.That(_hosts.Requests.Count(r => r.Method == "PUT"), Is.Zero);
+    }
+
+    [Test]
+    public async Task ReconcileComparesAGrantFromBeforePlansWereKeptHereByPlanIdAlone()
+    {
+        _hosts.Serve(Two, Frodo);
+        var grant = await _plans.GrantAsync(Frodo, "veterans", null, null, null);
+        await ForgetWhatThePlanGaveAsync(grant.Id);
+        _hosts.Serve(Two, Frodo, "veterans", quotaBytes: 5368709120, publicWebPresence: false);
+
+        Assert.That(await _plans.ReconcileAsync(), Is.Empty);
+
+        _hosts.Serve(Two, Frodo, "free", quotaBytes: 5368709120, publicWebPresence: false);
+        Assert.That(await _plans.ReconcileAsync(), Is.EqualTo(new[] { Frodo }));
+        Assert.That(_hosts.On(Two, Frodo), Is.EqualTo(new FakeIdentityHosts.Identity("veterans", 5368709120, false)));
+    }
+
     [Test]
     public async Task ReconcileLeavesMatchingPlansAlone()
     {
@@ -292,6 +398,17 @@ public class PlanServiceTests
     }
 
     //
+
+    // Makes the grant look like one made before plans were kept here, without what the plan gave
+    private async Task ForgetWhatThePlanGaveAsync(long grantId)
+    {
+        await using var connection = new SqliteConnection($"Data Source={_path}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE plan_grants SET quota_bytes = NULL, public_web_presence = NULL WHERE id = @id;";
+        command.Parameters.AddWithValue("@id", grantId);
+        await command.ExecuteNonQueryAsync();
+    }
 
     private sealed class SingleHandlerFactory(HttpMessageHandler handler) : IHttpClientFactory
     {

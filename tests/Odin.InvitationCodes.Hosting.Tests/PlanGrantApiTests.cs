@@ -65,7 +65,7 @@ public class PlanGrantApiTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         var grant = (await response.Content.ReadFromJsonAsync<PlanGrant>())!;
         Assert.That(grant with { Id = 0, CreatedAt = 0, UpdatedAt = 0, AppliedAt = null }, Is.EqualTo(new PlanGrant(
-            0, Frodo, "veterans", "purchase", "pay_9", "applied", InvitationCodeServer.Hosts[1],
+            0, Frodo, "veterans", 1099511627776, true, "purchase", "pay_9", "applied", InvitationCodeServer.Hosts[1],
             InvitationCodeServer.Hosts[1], 1, null, null, 0, 0, null)));
         Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[1], Frodo), Is.EqualTo("veterans"));
         Assert.That(_server.IdentityHosts.HostsAsked()[0], Is.EqualTo(InvitationCodeServer.Hosts[1]), "the hint first");
@@ -94,7 +94,8 @@ public class PlanGrantApiTests
 
     [TestCase("not a domain", "veterans", null, "Invalid identity")]
     [TestCase(Frodo, "", null, "planId is required")]
-    [TestCase(Frodo, "has space", null, "Invalid planId")]
+    [TestCase(Frodo, "has space", null, "There is no plan")]
+    [TestCase(Frodo, "gold", null, "There is no plan 'gold'")]
     [TestCase(Frodo, "veterans", "gift", "source must be one of")]
     public async Task BadInputIsA400(string identity, string planId, string? source, string message)
     {
