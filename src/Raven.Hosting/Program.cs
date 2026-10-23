@@ -183,6 +183,27 @@ plansApi.MapGet("/{id}", async (string id) =>
 plansApi.MapPatch("/{id}", async (string id, PlanChange change) =>
     await planStore.UpdateAsync(id, change) is { } plan ? Results.Ok(plan) : Results.NotFound());
 
+// What the plan costs for this many months: added, or changed
+plansApi.MapPut("/{id}/prices/{months:int}", async (string id, int months, PriceRequest request) =>
+    await planStore.SetPriceAsync(id, months,
+        request.AmountCents ?? throw new InvalidPlanRequestException("amountCents is required")) is { } plan
+        ? Results.Ok(plan)
+        : Results.NotFound());
+
+// A term the plan is no longer sold for; not the last price of a plan for sale
+plansApi.MapDelete("/{id}/prices/{months:int}", async (string id, int months) =>
+{
+    try
+    {
+        var (plan, found) = await planStore.RemovePriceAsync(id, months);
+        return found ? Results.Ok(plan) : Results.NotFound();
+    }
+    catch (PlanConflictException e)
+    {
+        return Results.Conflict(e.Message);
+    }
+});
+
 // Only a plan no code or grant uses; to retire one in use, mark it not for sale
 plansApi.MapDelete("/{id}", async (string id) =>
 {
@@ -217,7 +238,7 @@ grants.MapPost("/", async (GrantRequest request, PlanService plans) =>
     try
     {
         return Results.Ok(await plans.GrantAsync(request.Identity, request.PlanId, request.Source, request.Reference,
-            request.Host));
+            request.Host, request.Months));
     }
     catch (PlanGrantConflictException e)
     {
@@ -264,7 +285,11 @@ public record ValidateResponse(bool Valid);
 /// <param name="Source">code, purchase or admin; admin when left out</param>
 /// <param name="Reference">The caller's id for it, e.g. a payment id; made up when left out</param>
 /// <param name="Host">The provisioning domain of the host the identity is on, if known; a hint, tried first</param>
-public record GrantRequest(string? Identity, string? PlanId, string? Source, string? Reference, string? Host);
+/// <param name="Months">For a purchase, the billing term bought; the grant records the plan's price for it</param>
+public record GrantRequest(string? Identity, string? PlanId, string? Source, string? Reference, string? Host,
+    int? Months = null);
+/// <param name="AmountCents">What the term costs, in US cents; 0 is free</param>
+public record PriceRequest(long? AmountCents);
 public record UseResponse(bool Used, UsedInvitationCode? Code);
 
 /// <summary>

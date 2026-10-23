@@ -21,7 +21,7 @@ dotnet test
 
 `./raven.sh` wraps the API. `./raven.sh setup` saves both keys to `~/.raven-hosting` (outside the
 repo, readable only by you); then for plans `plans` (a table; `--json` for the service's answer), `plan-create`,
-`plan-edit`, `plan-delete`; for codes `./raven.sh create --uses 5 --source "spring campaign" --plan registered --owner frodo.demo.rocks`,
+`plan-edit`, `plan-price`, `plan-delete`; for codes `./raven.sh create --uses 5 --source "spring campaign" --plan registered --owner frodo.demo.rocks`,
 `list`, `stats`, `edit`, `disable`, `enable`, `validate`, `use`, `undo`; and for grants `grant --id frodo.demo.rocks --plan veterans`, `grants`, `retry`. `./raven.sh help` explains each command and its arguments.
 
 ## Tests
@@ -86,8 +86,8 @@ grant.
 | `name`, `description` | what owners see; the name is required |
 | `quotaBytes` | bytes an identity on it may store; more than 0, there is no unlimited. `storage` in answers is the same, as people read it (`1 TB`) |
 | `publicWebPresence` | whether an identity on it has a public home page |
-| `forSale` | whether owners can buy it on the upgrade page; `false` by default |
-| `price` | shown to buyers, e.g. `$5 a month`; nothing charges it yet |
+| `forSale` | whether owners can buy it on the upgrade page; `false` by default. A plan for sale has at least one price |
+| `prices` | what it costs, one price per billing term, shortest first: `{months, amountCents}` in US cents, `months` from 1 to 120 (1 monthly, 12 yearly, 24 two-yearly...), `amountCents` 0 or more (0 is free). Answers add `amount` (`$50`), `per` (`year`) and `text` (`$50 / year`). Nothing charges them yet: the upgrade page's checkout is a test |
 | `sortOrder` | plans are listed, and the upgrade page's cards shown, by this, then by `id`; `0` by default |
 | `createdAt`, `updatedAt` | unix ms |
 
@@ -99,14 +99,19 @@ purchase. A plan cannot be deleted while a code or a grant uses it; to retire on
 
 | Call | Answer |
 |---|---|
-| `POST / {id, name, quotaBytes, publicWebPresence, forSale?, description?, price?, sortOrder?}` | the new plan; 409 if the Id is taken |
+| `POST / {id, name, quotaBytes, publicWebPresence, forSale?, description?, prices?: [{months, amountCents}], sortOrder?}` | the new plan; 409 if the Id is taken |
 | `GET /` | every plan, by `sortOrder`, then `id` |
 | `GET /<id>` | the plan; 404 if there is none |
-| `PATCH /<id> {name?, description?, quotaBytes?, publicWebPresence?, forSale?, price?, sortOrder?}` | the plan as it is now; 404 if there is none. Fields left out stay as they are |
+| `PATCH /<id> {name?, description?, quotaBytes?, publicWebPresence?, forSale?, sortOrder?}` | the plan as it is now; 404 if there is none. Fields left out stay as they are. `forSale: true` on a plan with no price is a 400 |
+| `PUT /<id>/prices/<months> {amountCents}` | the plan, with that term added or its price changed; 404 if there is no such plan |
+| `DELETE /<id>/prices/<months>` | the plan, without that term; 404 if it has none; 409 for the last price of a plan for sale |
 | `DELETE /<id>` | 204; 404 if there is none; 409 while a code or grant uses it |
 
-Bad input (a bad or reserved Id, no name, a quota of 0 or less, a missing `quotaBytes` or `publicWebPresence`) is
-a 400.
+Bad input (a bad or reserved Id, no name, a quota of 0 or less, a missing `quotaBytes` or `publicWebPresence`, a
+price for 0 or more than 120 months or below 0, two prices for one term, a plan for sale with no price) is a 400.
+
+Changing a price changes nothing for purchases already made: a purchase grant keeps the term and price it was
+bought at.
 
 ### Deploying plans
 
@@ -117,6 +122,7 @@ plan. The starting set, today's plans:
 | Id | Quota | Public page | For sale |
 |---|---|---|---|
 | `free` | 64424509440 (60 GB) | yes | no |
+| `free-1gb` | 1073741824 (1 GB) | no | no |
 | `free-5gb` | 5368709120 (5 GB) | no | no |
 | `registered` | 10737418240 (10 GB) | yes | yes |
 | `veterans` | 1099511627776 (1 TB) | yes | yes |
@@ -124,10 +130,15 @@ plan. The starting set, today's plans:
 
 ```bash
 ./raven.sh plan-create --id free --name Free --quota-bytes 64424509440 --public-web-presence true
+./raven.sh plan-create --id free-1gb --name "Free 1 GB" --quota-bytes 1073741824 --public-web-presence false
 ./raven.sh plan-create --id free-5gb --name "Free 5 GB" --quota-bytes 5368709120 --public-web-presence false
-./raven.sh plan-create --id registered --name Registered --quota-bytes 10737418240 --public-web-presence true --for-sale true --sort-order 1
-./raven.sh plan-create --id veterans --name Veterans --quota-bytes 1099511627776 --public-web-presence true --for-sale true --sort-order 2
 ./raven.sh plan-create --id tiny-test --name "Tiny test" --quota-bytes 1048576 --public-web-presence false
+
+# The plans for sale need their prices: --price <months>:<dollars>, once per term
+./raven.sh plan-create --id registered --name Registered --quota-bytes 10737418240 --public-web-presence true \
+  --price 1:<dollars> --price 12:<dollars> --for-sale true --sort-order 1
+./raven.sh plan-create --id veterans --name Veterans --quota-bytes 1099511627776 --public-web-presence true \
+  --price 1:<dollars> --price 12:<dollars> --price 24:<dollars> --for-sale true --sort-order 2
 ./raven.sh plans
 ./raven.sh stats      # every plan under "by plan" should be one of the plans above
 ```
@@ -178,7 +189,7 @@ identity a new grant instead.
 
 | Call | Answer |
 |---|---|
-| `POST / {identity, planId, source?, reference?, host?}` | the grant, with the plan's `quotaBytes` and `publicWebPresence` now, after trying to set it straight away. A `planId` that is not a plan is a 400. `source` is `code`, `purchase` or `admin` (the default); `reference` is the caller's id for it, e.g. a payment id, made up when left out. The same `reference` again is the same grant (not set twice); for another identity or plan it is a 409 |
+| `POST / {identity, planId, source?, reference?, host?, months?}` | the grant, with the plan's `quotaBytes` and `publicWebPresence` now, after trying to set it straight away. A `planId` that is not a plan is a 400. `months` is the term bought, for a purchase: the grant records it and the plan's price for it now (`priceMonths`, `priceAmountCents`), and a term the plan has no price for is a 400. `source` is `code`, `purchase` or `admin` (the default); `reference` is the caller's id for it, e.g. a payment id, made up when left out. The same `reference` again is the same grant (not set twice); for another identity or plan it is a 409 |
 | `GET /?identity=<odinId>&status=<status>` | the grants, newest first; both filters optional |
 | `POST /<id>/retry` | tries a pending or failed grant again now; 404 if there is none, 409 if it is already applied |
 
@@ -205,18 +216,23 @@ Where an owner gets a bigger plan. Their owner console sends them to
    identity answering `aes-cbc` is refused as a downgrade). A token that opens is the proof the owner of that
    identity is here. The session is a data-protected cookie on `/upgrade`, for an hour.
 3. **Choose** (`/upgrade`): the plans marked for sale as cards, by `sortOrder`: name, description, storage
-   (`1 TB of storage`), whether there is a public home page, and the price when there is one. The identity's plan,
+   (`1 TB of storage`), whether there is a public home page, and its prices, each term with what it saves on paying
+   monthly when it does (`$50 / year save 17%`, against 12 times the monthly price). The identity's plan,
    asked of its host as grants find it and matched by plan Id, is marked "Your plan"; when it is not one for sale
    it is named above the cards.
-4. **Confirm** (`/upgrade/confirm?plan=<id>`): "Change your plan from A to B", then **Continue to checkout**.
-5. **Test checkout** (`/upgrade/checkout?plan=<id>`): an order summary and a card form under a banner saying
+4. **Confirm** (`/upgrade/confirm?plan=<id>`): "Change your plan from A to B", then **How would you like to
+   pay?**, one choice per term (the shortest chosen), and **Continue to checkout**.
+5. **Test checkout** (`/upgrade/checkout?plan=<id>&months=<term>`): an order summary with the term's price, and a
+   card form under a banner saying
    **no payment is taken**. The card fields have no names, so the browser never sends them; the server reads only
-   `planId` and ignores anything else. **Complete purchase** posts it.
-6. **The stand-in for payment** (`POST /upgrade/checkout`): it makes a `purchase` grant for the plan (see Plan
-   grants), with what the plan gives now, which sets it on the identity's host straight away or keeps trying, and
-   redirects to done.
+   `planId` and `months` and ignores anything else. **Complete purchase** posts it. A plan sold for one term needs
+   no `months`; for several, a term it isn't sold for is a 400 that sends you back to choose.
+6. **The stand-in for payment** (`POST /upgrade/checkout`): it makes a `purchase` grant for the plan and term (see
+   Plan grants), with what the plan gives and the term's price now, which sets it on the identity's host straight
+   away or keeps trying, and redirects to done. Renewal, expiry and what happens when a term runs out come with real
+   payment.
 7. **Done** (`/upgrade/done?grant=<id>`, only for the signed-in identity's own purchases): "You're on B", or
-   that the change is on its way, or that it failed; then **Back to your Homebase**.
+   that the change is on its way, or that it failed, with the term and price bought; then **Back to your Homebase**.
 
 A plan not for sale cannot be confirmed, checked out or bought (400). The done page names the plan bought even
 once it is no longer for sale.

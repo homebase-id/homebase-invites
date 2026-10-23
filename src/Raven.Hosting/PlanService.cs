@@ -67,10 +67,12 @@ public class PlanService(
 
     /// <summary>
     /// Makes the grant (or finds the one with this reference) and tries to set it on its host straight away. The
-    /// grant records what the plan gives now; a plan that does not exist is refused.
+    /// grant records what the plan gives now, and for a purchase the term bought and its price now; a plan that does
+    /// not exist, or a term it has no price for, is refused.
     /// </summary>
+    /// <param name="months">The billing term bought, for a purchase; null for none</param>
     public async Task<PlanGrant> GrantAsync(string? identity, string? planId, string? source, string? reference,
-        string? host)
+        string? host, int? months = null)
     {
         if (string.IsNullOrWhiteSpace(planId))
         {
@@ -79,7 +81,12 @@ public class PlanService(
         var plan = await planStore.GetAsync(planId) ??
                    throw new InvalidPlanGrantRequestException($"There is no plan '{planId.Trim()}'");
 
-        var (grant, created) = await store.CreateAsync(identity, plan, source, reference, host, Now);
+        var price = months == null
+            ? null
+            : plan.PriceFor(months) ??
+              throw new InvalidPlanGrantRequestException($"Plan {plan.Id} has no price for {months} months");
+
+        var (grant, created) = await store.CreateAsync(identity, plan, price, source, reference, host, Now);
         return created || grant.Status == PlanGrantStatus.Pending ? await ApplyAsync(grant) : grant;
     }
 

@@ -90,9 +90,13 @@ public class UpgradePageTests
         var cards = page.Split("<li class=\"card")[1..];
         Assert.That(cards, Has.Length.EqualTo(2));
         Assert.That(cards[0], Does.Contain("<h2>Registered</h2>").And.Contain("10 GB of storage")
-            .And.Contain("A public home page").And.Not.Contain("class=\"price\""));
+            .And.Contain("A public home page").And.Contain("<li>$10 / year</li>")
+            .And.Not.Contain("save"), "no monthly price to save on");
         Assert.That(cards[1], Does.Contain("<h2>Veterans</h2>").And.Contain("For those who served")
-            .And.Contain("1 TB of storage").And.Contain("<p class=\"price\">$5 a month</p>"));
+            .And.Contain("1 TB of storage")
+            .And.Contain("<li>$5 / month</li>")
+            .And.Contain("<li>$50 / year <span class=\"save\">save 17%</span></li>")
+            .And.Contain("<li>$90 / 2 years <span class=\"save\">save 25%</span></li>"));
     }
 
     [Test]
@@ -132,7 +136,45 @@ public class UpgradePageTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(html, Does.Contain("Change your plan from <strong>Free</strong> to"));
         Assert.That(html, Does.Contain("<h2>Veterans</h2>"));
-        Assert.That(html, Does.Contain("/upgrade/checkout?plan=veterans"));
+        Assert.That(html, Does.Contain("How would you like to pay?"));
+        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="1" checked> $5 / month"""),
+            "the shortest term, chosen");
+        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="12"> $50 / year"""));
+        Assert.That(html, Does.Contain("""<input type="radio" name="months" value="24"> $90 / 2 years"""));
+    }
+
+    [Test]
+    public async Task TheCheckoutShowsTheTermChosen()
+    {
+        await SignInAsync();
+
+        var html = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=24")).Content.ReadAsStringAsync();
+
+        Assert.That(html, Does.Contain("<p class=\"price\">$90 / 2 years</p>"));
+        Assert.That(html, Does.Contain("""<input type="hidden" name="months" value="24">"""));
+        Assert.That(html, Does.Not.Contain("$50 / year"), "only the term chosen");
+    }
+
+    [TestCase("/upgrade/checkout?plan=veterans", TestName = "a checkout of a plan with three terms and none chosen")]
+    [TestCase("/upgrade/checkout?plan=veterans&months=6", TestName = "a checkout of a term the plan is not sold for")]
+    public async Task ACheckoutNeedsATermThePlanIsSoldFor(string path)
+    {
+        await SignInAsync();
+
+        var response = await _browser.GetAsync(path);
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(await response.Content.ReadAsStringAsync(), Does.Contain("Choose how to pay"));
+    }
+
+    [Test]
+    public async Task APlanWithOneTermNeedsNoChoice()
+    {
+        await SignInAsync();
+
+        var html = await (await _browser.GetAsync("/upgrade/checkout?plan=registered")).Content.ReadAsStringAsync();
+
+        Assert.That(html, Does.Contain("<p class=\"price\">$10 / year</p>"));
     }
 
     [TestCase("/upgrade/confirm?plan=tiny-test")]
@@ -153,7 +195,7 @@ public class UpgradePageTests
     {
         await SignInAsync();
 
-        var html = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
+        var html = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=12")).Content.ReadAsStringAsync();
 
         Assert.That(html, Does.Contain("Test checkout"));
         Assert.That(html, Does.Contain("no payment is taken"));
@@ -161,7 +203,7 @@ public class UpgradePageTests
         Assert.That(html, Does.Contain("Card number"));
         var form = Regex.Match(html, "<form method=\"post\" action=\"/upgrade/checkout\".*?</form>", RegexOptions.Singleline).Value;
         var names = Regex.Matches(form, "name=\"([^\"]+)\"").Select(m => m.Groups[1].Value);
-        Assert.That(names, Is.EquivalentTo(new[] { "__RequestVerificationToken", "planId" }),
+        Assert.That(names, Is.EquivalentTo(new[] { "__RequestVerificationToken", "planId", "months" }),
             "the card fields have no names, so the browser never sends them");
     }
 
@@ -237,10 +279,10 @@ public class UpgradePageTests
     public async Task CompletingTheCheckoutSetsThePlanOnTheIdentitysHost()
     {
         await SignInAsync();
-        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
+        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=12")).Content.ReadAsStringAsync();
 
         // Card values a browser could send anyway are ignored, and kept nowhere
-        var response = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "veterans"),
+        var response = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "veterans"), ("months", "12"),
             ("cardNumber", "4242424242424242"), ("cvc", "123"));
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Redirect));
@@ -254,12 +296,16 @@ public class UpgradePageTests
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         Assert.That(grants!.Single().Source, Is.EqualTo(PlanGrantSource.Purchase));
         Assert.That(grants!.Single().Status, Is.EqualTo(PlanGrantStatus.Applied));
+        Assert.That((grants!.Single().PriceMonths, grants!.Single().PriceAmountCents), Is.EqualTo((12, 5000L)),
+            "the term bought, at its price then");
         Assert.That(grantsJson, Does.Not.Contain("4242424242424242"));
 
         var done = await _browser.GetAsync(response.Headers.Location!.ToString());
         var html = await done.Content.ReadAsStringAsync();
         Assert.That(done.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(html, Does.Contain("You&#x27;re on Veterans").Or.Contain("You're on Veterans"));
+        Assert.That(html, Does.Contain("<p class=\"price\">$50 / year</p>"));
+        Assert.That(html, Does.Contain("nothing was charged"));
         Assert.That(html, Does.Contain($"href=\"https://{Frodo}/owner/settings/plan\""), "back to the identity's plan page");
     }
 
@@ -267,8 +313,8 @@ public class UpgradePageTests
     public async Task TheDonePageNamesAPlanNoLongerForSale()
     {
         await SignInAsync();
-        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
-        var bought = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "veterans"));
+        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=12")).Content.ReadAsStringAsync();
+        var bought = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "veterans"), ("months", "12"));
         await SetForSaleAsync("veterans", false);
 
         var html = await (await _browser.GetAsync(bought.Headers.Location!.ToString())).Content.ReadAsStringAsync();
@@ -281,7 +327,7 @@ public class UpgradePageTests
     public async Task APlanNotForSaleCannotBeBought()
     {
         await SignInAsync();
-        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
+        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans&months=12")).Content.ReadAsStringAsync();
 
         var response = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "tiny-test"));
 

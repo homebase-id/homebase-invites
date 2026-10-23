@@ -53,7 +53,7 @@ public class RavenCliTests
         var result = await RunAsync("help");
 
         Assert.That(result.ExitCode, Is.EqualTo(0));
-        foreach (var command in new[] { "setup", "ping", "plans", "plan-create", "plan-edit", "plan-delete", "create", "list", "stats", "edit", "disable", "enable", "grant", "grants", "retry", "validate", "use", "undo" })
+        foreach (var command in new[] { "setup", "ping", "plans", "plan-create", "plan-edit", "plan-price", "plan-delete", "create", "list", "stats", "edit", "disable", "enable", "grant", "grants", "retry", "validate", "use", "undo" })
         {
             Assert.That(result.Output, Does.Contain($"  {command}"), command);
         }
@@ -404,25 +404,25 @@ public class RavenCliTests
     public async Task PlanCreatePrintsThePlan()
     {
         var result = await RunAsync("plan-create", "--id", "cli-gold", "--name", "Gold", "--quota-bytes", "5368709120",
-            "--public-web-presence", "false", "--for-sale", "true", "--price", "$2 a month", "--sort-order", "-1",
-            "--description", "A small plan");
+            "--public-web-presence", "false", "--price", "1:2", "--price", "12:19.5", "--for-sale", "true",
+            "--sort-order", "-1", "--description", "A small plan");
 
         var plan = result.Json<Plan>();
         Assert.That(plan with { CreatedAt = 0, UpdatedAt = 0 }, Is.EqualTo(new Plan("cli-gold", "Gold", "A small plan",
-            5368709120, false, true, "$2 a month", -1, 0, 0)));
+            5368709120, false, true, [new(1, 200), new(12, 1950)], -1, 0, 0)));
     }
 
     [Test]
     public async Task PlansPrintsATable()
     {
-        await CreatePlanAsync("cli-table", "--name", "Table plan", "--for-sale", "true", "--price", "$1");
+        await CreatePlanAsync("cli-table", "--name", "Table plan", "--for-sale", "true", "--price", "1:1", "--price", "12:10");
 
         var result = await RunAsync("plans");
 
         Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
         var lines = result.Output.Split('\n');
-        Assert.That(lines[0], Does.Match(@"^ID +NAME +STORAGE +PUBLIC PAGE +FOR SALE +PRICE +ORDER$"));
-        Assert.That(lines, Has.Some.Match(@"^cli-table +Table plan +1 TB +yes +yes +\$1 +0$"));
+        Assert.That(lines[0], Does.Match(@"^ID +NAME +STORAGE +PUBLIC PAGE +FOR SALE +PRICES +ORDER$"));
+        Assert.That(lines, Has.Some.Match(@"^cli-table +Table plan +1 TB +yes +yes +\$1 / month, \$10 / year +0$"));
         Assert.That(lines, Has.Some.Match(@"^tiny-test +Tiny test +1 MB +no +no +- +0$"));
         Assert.That((await RunAsync("plans", "--json")).Json<List<Plan>>().Select(p => p.Id), Does.Contain("cli-table"));
     }
@@ -430,7 +430,7 @@ public class RavenCliTests
     [Test]
     public async Task PlanEditChangesOnlyWhatIsGiven()
     {
-        var plan = await CreatePlanAsync("cli-edit", "--for-sale", "true", "--price", "$3");
+        var plan = await CreatePlanAsync("cli-edit", "--for-sale", "true", "--price", "1:3");
 
         var result = await RunAsync("plan-edit", "CLI-EDIT", "--for-sale", "false", "--quota-bytes", "2199023255552");
 
@@ -438,7 +438,51 @@ public class RavenCliTests
         Assert.That(edited with { UpdatedAt = 0 }, Is.EqualTo(plan with
             { ForSale = false, QuotaBytes = 2199023255552, UpdatedAt = 0 }));
         Assert.That((await RunAsync("plan-edit", "cli-edit")).Error, Does.Contain("nothing to change"));
-        Assert.That((await RunAsync("plan-edit", "cli-nothing", "--price", "x")).Status, Is.EqualTo(404));
+        Assert.That((await RunAsync("plan-edit", "cli-nothing", "--name", "x")).Status, Is.EqualTo(404));
+        Assert.That((await RunAsync("plan-edit", "cli-edit", "--price", "1:3")).Error, Does.Contain("unknown option: --price"),
+            "prices are changed with plan-price");
+    }
+
+    [Test]
+    public async Task PlanPriceSetsAndRemovesATerm()
+    {
+        await CreatePlanAsync("cli-priced", "--price", "1:3", "--for-sale", "true");
+
+        var yearly = (await RunAsync("plan-price", "cli-priced", "12", "30")).Json<Plan>();
+        Assert.That(yearly.Prices, Is.EqualTo(new[] { new PlanPrice(1, 300), new PlanPrice(12, 3000) }));
+
+        var changed = (await RunAsync("plan-price", "cli-priced", "12", "29.99")).Json<Plan>();
+        Assert.That(changed.PriceFor(12), Is.EqualTo(new PlanPrice(12, 2999)));
+
+        var removed = (await RunAsync("plan-price", "cli-priced", "1", "--remove")).Json<Plan>();
+        Assert.That(removed.Prices, Is.EqualTo(new[] { new PlanPrice(12, 2999) }));
+
+        var last = await RunAsync("plan-price", "cli-priced", "12", "--remove");
+        Assert.That(last.Status, Is.EqualTo(409), "the only price of a plan for sale");
+    }
+
+    [TestCase(new[] { "cli-x", "12" }, "usage: ./raven.sh plan-price", TestName = "plan-price without an amount")]
+    [TestCase(new[] { "cli-x", "twelve", "30" }, "usage: ./raven.sh plan-price", TestName = "plan-price with months not a number")]
+    [TestCase(new[] { "cli-x", "12", "$30" }, "<dollars> must be an amount in dollars", TestName = "plan-price with a dollar sign")]
+    [TestCase(new[] { "cli-x", "12", "30.999" }, "<dollars> must be an amount in dollars", TestName = "plan-price with fractions of a cent")]
+    public async Task PlanPriceRefusesBadArguments(string[] arguments, string message)
+    {
+        var result = await RunAsync(["plan-price", .. arguments]);
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Error, Does.Contain(message));
+    }
+
+    [TestCase("12", TestName = "plan-create with a price without a term")]
+    [TestCase("12:", TestName = "plan-create with a price without an amount")]
+    [TestCase("12:$50", TestName = "plan-create with a price with a dollar sign")]
+    public async Task PlanCreateRefusesABadPrice(string price)
+    {
+        var result = await RunAsync("plan-create", "--id", "cli-bad", "--name", "Bad", "--quota-bytes", "1",
+            "--public-web-presence", "true", "--price", price);
+
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.Error, Does.Contain("--price must be <months>:<dollars>"));
     }
 
     [Test]

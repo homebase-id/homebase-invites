@@ -179,18 +179,25 @@ public static class UpgradePage
                          <div class="card">
                          <p class="muted">Change your plan from <strong>{Encode(current)}</strong> to</p>
                          <h2>{Encode(chosen.Name)}</h2>
-                         {Details(chosen)}
+                         {Details(chosen, prices: false)}
                          </div>
+                         <form method="get" action="{Root}/checkout" class="card terms">
+                         <input type="hidden" name="plan" value="{Encode(chosen.Id)}">
+                         <fieldset>
+                         <legend>How would you like to pay?</legend>
+                         {TermChoices(chosen)}
+                         </fieldset>
                          <div class="actions">
-                         <a class="button" href="{Root}/checkout?plan={Uri.EscapeDataString(chosen.Id)}">Continue to checkout</a>
+                         <button type="submit">Continue to checkout</button>
                          <a class="button secondary" href="{Root}">Back</a>
                          </div>
+                         </form>
                          """);
             return Page(StatusCodes.Status200OK, "Confirm your new plan", html.ToString());
         });
 
         // Step 3, a test checkout: the card fields have no names, so the browser never sends them anywhere
-        page.MapGet("/checkout", async (HttpContext context, string? plan, UpgradeOptions options,
+        page.MapGet("/checkout", async (HttpContext context, string? plan, int? months, UpgradeOptions options,
             UpgradeSession session, PlanStore planStore, IAntiforgery antiforgery) =>
         {
             if (!options.Enabled)
@@ -209,6 +216,11 @@ public static class UpgradePage
             {
                 return NotForSale();
             }
+            var price = TermOf(chosen, months);
+            if (price == null)
+            {
+                return ChooseATerm(chosen);
+            }
 
             var html = new StringBuilder();
             html.Append(StepsBar(2));
@@ -217,12 +229,14 @@ public static class UpgradePage
                          <div class="card">
                          <p class="muted">Order summary</p>
                          <h2>{Encode(chosen.Name)}</h2>
-                         {Details(chosen)}
+                         {Details(chosen, prices: false)}
+                         <p class="price">{Encode(price.Text)}</p>
                          <p class="muted">For {Encode(signedIn.Identity)}</p>
                          </div>
                          <form method="post" action="{Root}/checkout" class="card checkout">
                          {AntiforgeryField(context, antiforgery)}
                          <input type="hidden" name="planId" value="{Encode(chosen.Id)}">
+                         <input type="hidden" name="months" value="{price.Months}">
                          <label>Name on card <input autocomplete="off" placeholder="Frodo Baggins"></label>
                          <label>Card number <input autocomplete="off" inputmode="numeric" placeholder="4242 4242 4242 4242"></label>
                          <div class="row">
@@ -238,10 +252,10 @@ public static class UpgradePage
             return Page(StatusCodes.Status200OK, "Checkout", html.ToString());
         });
 
-        // Completing the test checkout makes a purchase grant, which sets the plan on the identity's host. Only
-        // planId is read; anything else in the form is ignored
-        page.MapPost("/checkout", async (HttpContext context, [FromForm] string? planId, UpgradeOptions options,
-            UpgradeSession session, PlanService plans, PlanStore planStore) =>
+        // Completing the test checkout makes a purchase grant of the plan and term, which sets the plan on the
+        // identity's host. Only planId and months are read; anything else in the form is ignored
+        page.MapPost("/checkout", async (HttpContext context, [FromForm] string? planId, [FromForm] int? months,
+            UpgradeOptions options, UpgradeSession session, PlanService plans, PlanStore planStore) =>
         {
             if (!options.Enabled)
             {
@@ -259,9 +273,14 @@ public static class UpgradePage
             {
                 return NotForSale();
             }
+            var price = TermOf(plan, months);
+            if (price == null)
+            {
+                return ChooseATerm(plan);
+            }
 
             var grant = await plans.GrantAsync(signedIn.Identity, plan.Id, PlanGrantSource.Purchase,
-                $"purchase-{Guid.NewGuid():N}", signedIn.Host);
+                $"purchase-{Guid.NewGuid():N}", signedIn.Host, price.Months);
             if (grant.Host != null && grant.Host != signedIn.Host)
             {
                 session.Write(context, signedIn with { Host = grant.Host });
@@ -298,13 +317,19 @@ public static class UpgradePage
             html.Append("<div class=\"card\">");
             html.Append(purchase.Status switch
             {
-                PlanGrantStatus.Applied => $"<h2>You're on {Encode(name)}</h2>" + (plan == null ? "" : Details(plan)),
+                PlanGrantStatus.Applied => $"<h2>You're on {Encode(name)}</h2>" +
+                                           (plan == null ? "" : Details(plan, prices: false)),
                 PlanGrantStatus.Pending => $"<h2>Thank you</h2>" +
                                            P($"Your purchase of {name} is recorded; your plan will change shortly."),
                 _ => "<h2>Something went wrong</h2>" +
                      P($"We could not change {signedIn.Identity} to {name}. Please contact us with reference " +
                        $"{purchase.Reference}."),
             });
+            if (purchase is { PriceMonths: { } boughtMonths, PriceAmountCents: { } boughtCents })
+            {
+                html.Append($"""<p class="price">{Encode(new PlanPrice(boughtMonths, boughtCents).Text)}</p>""");
+                html.Append(P("This was a test checkout: nothing was charged."));
+            }
             html.Append("</div>");
             html.Append($"""<div class="actions"><a class="button" href="{Encode(ReturnUrl(signedIn.Identity))}">Back to your Homebase</a></div>""");
             return Page(StatusCodes.Status200OK, purchase.Status == PlanGrantStatus.Applied ? "Done" : "Thank you",
@@ -402,8 +427,8 @@ public static class UpgradePage
     private static async Task<string> PlanNameAsync(PlanStore planStore, string? planId) =>
         (await planStore.GetAsync(planId))?.Name ?? planId ?? "none";
 
-    // The description, then what the plan gives, then its price when it has one
-    private static string Details(Plan plan)
+    // The description, then what the plan gives, then what each term costs
+    private static string Details(Plan plan, bool prices = true)
     {
         var html = new StringBuilder();
         if (plan.Description != "")
@@ -413,12 +438,41 @@ public static class UpgradePage
         html.Append($"""<ul class="gives"><li>{Encode(plan.Storage)} of storage</li>""");
         html.Append(plan.PublicWebPresence ? "<li>A public home page</li>" : "<li>No public home page</li>");
         html.Append("</ul>");
-        if (plan.Price != "")
+        if (prices && plan.Prices.Count > 0)
         {
-            html.Append($"""<p class="price">{Encode(plan.Price)}</p>""");
+            html.Append("<ul class=\"prices\">");
+            foreach (var price in plan.Prices)
+            {
+                html.Append($"<li>{PriceText(plan, price)}</li>");
+            }
+            html.Append("</ul>");
         }
         return html.ToString();
     }
+
+    // "$50 / year", and what it saves on paying monthly
+    private static string PriceText(Plan plan, PlanPrice price) =>
+        Encode(price.Text) + (plan.Saving(price) is { } saving ? $""" <span class="save">save {saving}%</span>""" : "");
+
+    // A radio button per term, the shortest chosen
+    private static string TermChoices(Plan plan)
+    {
+        var html = new StringBuilder();
+        for (var i = 0; i < plan.Prices.Count; i++)
+        {
+            var price = plan.Prices[i];
+            html.Append($"""<label><input type="radio" name="months" value="{price.Months}"{(i == 0 ? " checked" : "")}> {PriceText(plan, price)}</label>""");
+        }
+        return html.ToString();
+    }
+
+    // The term chosen; the plan's only one when none was and it has one
+    private static PlanPrice? TermOf(Plan plan, int? months) =>
+        months == null ? (plan.Prices.Count == 1 ? plan.Prices[0] : null) : plan.PriceFor(months);
+
+    private static IResult ChooseATerm(Plan plan) =>
+        Page(StatusCodes.Status400BadRequest, "Choose how to pay", P($"{plan.Name} is not sold for that term.") +
+            $"""<p><a href="{Root}/confirm?plan={Uri.EscapeDataString(plan.Id)}">Choose how to pay</a></p>""");
 
     private static string AntiforgeryField(HttpContext context, IAntiforgery antiforgery)
     {
@@ -474,7 +528,12 @@ public static class UpgradePage
           ul.plans .card .button { margin-top: auto; align-self: flex-start; }
           .card.current { border: 2px solid var(--brand); background: var(--soft); }
           ul.gives { margin: .25rem 0 .75rem; padding-left: 1.25rem; }
+          ul.prices { list-style: none; margin: .25rem 0 1rem; padding: 0; font-weight: 600; }
           .price { font-weight: 600; }
+          .save { display: inline-block; margin-left: .35rem; font-size: .8rem; font-weight: 600; color: #166534; background: #dcfce7; border-radius: .25rem; padding: 0 .35rem; }
+          .terms fieldset { border: 0; margin: 0; padding: 0; }
+          .terms legend { font-weight: 600; margin-bottom: .5rem; }
+          .terms label { display: block; padding: .5rem 0; }
           .badge { display: inline-block; font-size: .8rem; font-weight: 600; color: var(--brand); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 .5rem; }
           .banner { background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; border-radius: .5rem; padding: .75rem 1rem; }
           .checkout label { display: block; font-size: .9rem; color: var(--muted); margin-bottom: .75rem; }
