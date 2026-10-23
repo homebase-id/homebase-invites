@@ -81,7 +81,7 @@ public class UpgradePageTests
         var page = await SignInAsync();
 
         Assert.That(page, Does.Contain($"Signed in as <strong>{Frodo}</strong>"));
-        Assert.That(page, Does.Contain("Your plan is <strong>Free</strong>"),
+        Assert.That(page, Does.Contain("Your plan now").And.Contain("<h2 id=\"now-heading\">Free</h2>"),
             "free is not for sale, so it is named above the cards, by its name");
         Assert.That(page, Does.Contain("Choose Veterans"));
         Assert.That(page, Does.Contain("Choose Registered"));
@@ -142,7 +142,7 @@ public class UpgradePageTests
         var html = await response.Content.ReadAsStringAsync();
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-        Assert.That(html, Does.Contain("Change your plan from <strong>Free</strong> to"));
+        Assert.That(html, Does.Contain("Change your plan from <strong>Free</strong>"));
         Assert.That(html, Does.Contain("<h2>Veterans</h2>"));
         Assert.That(html, Does.Contain("How would you like to pay?"));
         Assert.That(html, Does.Contain("""<input type="radio" name="months" value="1" checked /> $5 / month"""),

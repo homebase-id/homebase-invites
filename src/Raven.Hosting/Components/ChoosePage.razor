@@ -1,12 +1,11 @@
-@* Step 1: the plans for sale, the owner's own marked *@
+@* Step 1: what the owner has now, then the plans for sale, each against it *@
 <SitePage Title="Choose a plan" Step="0" Wide="true">
-    <p class="who">
-        Signed in as <strong>@Identity</strong>.
-        @if (!Plans.Any(p => UpgradePage.SamePlan(p.Id, CurrentPlanId)))
-        {
-            <text>Your plan is <strong>@CurrentPlanName</strong>.</text>
-        }
-    </p>
+    <p class="who">Signed in as <strong>@Identity</strong>.</p>
+
+    @if (Now != null)
+    {
+        <YourPlanNow Now="Now" PlanName="@CurrentPlanName" />
+    }
 
     @if (Plans.Count == 0)
     {
@@ -17,7 +16,7 @@
         <ul class="plans">
             @foreach (var plan in Plans)
             {
-                <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, CurrentPlanId)">
+                <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, Now?.PlanId)" Fit="PlanFit.Of(plan, Now)">
                     <Action>
                         <a class="button" href="@UpgradePage.ConfirmUrl(plan.Id)">Choose @plan.Name</a>
                     </Action>
@@ -29,7 +28,9 @@
 
 @code {
     [Parameter] public string Identity { get; set; } = "";
-    [Parameter] public string? CurrentPlanId { get; set; }
+
+    /// <summary>What the owner has now, as their host says</summary>
+    [Parameter] public IdentityOnHost? Now { get; set; }
     [Parameter] public string CurrentPlanName { get; set; } = "";
     [Parameter] public List<Plan> Plans { get; set; } = [];
 }

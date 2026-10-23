@@ -155,7 +155,7 @@ public static class UpgradePage
                 return Show<ChoosePage>(new
                 {
                     Identity = located.SignedIn!.Identity,
-                    CurrentPlanId = located.PlanId,
+                    Now = located.Now,
                     CurrentPlanName = await PlanNameAsync(planStore, located.PlanId),
                     Plans = (await planStore.ListAsync()).Where(IsForSale).ToList(),
                 });
@@ -229,10 +229,15 @@ public static class UpgradePage
             {
                 return located.Error;
             }
+            if (PlanFit.Of(chosen, located.Now) is { CanChoose: false } fit)
+            {
+                return TooSmall(chosen, fit);
+            }
 
             return Show<ConfirmPage>(new
             {
                 Plan = chosen,
+                Now = located.Now,
                 CurrentPlanName = await PlanNameAsync(planStore, located.PlanId),
             });
         });
@@ -299,6 +304,15 @@ public static class UpgradePage
                 return ChooseATerm(plan);
             }
 
+            // Not onto a plan smaller than what they store. A host that cannot say just now does not stop a purchase:
+            // the grant waits for it
+            var located = await LocateAsync(context, signedIn, session, plans);
+            if (located.Error == null && PlanFit.Of(plan, located.Now) is { CanChoose: false } fit)
+            {
+                return TooSmall(plan, fit);
+            }
+            signedIn = located.SignedIn ?? signedIn;
+
             var grant = await plans.GrantAsync(signedIn.Identity, plan.Id, PlanGrantSource.Purchase,
                 $"purchase-{Guid.NewGuid():N}", signedIn.Host, price.Months);
             if (grant.Host != null && grant.Host != signedIn.Host)
@@ -356,13 +370,17 @@ public static class UpgradePage
 
     //
 
-    internal record Located(UpgradeSession.Data? SignedIn, string? PlanId, IResult? Error);
+    /// <summary>The signed-in owner, found on their host, and what the host says they have now</summary>
+    internal record Located(UpgradeSession.Data? SignedIn, IdentityOnHost? Now, IResult? Error)
+    {
+        public string? PlanId => Now?.PlanId;
+    }
 
     // Where the identity is and its plan, asked of its host; remembers the host in the session when it moved
     internal static async Task<Located> LocateAsync(HttpContext context, UpgradeSession.Data signedIn,
         UpgradeSession session, PlanService plans)
     {
-        var located = await plans.LocateAsync(signedIn.Identity, signedIn.Host);
+        var located = await plans.LookUpAsync(signedIn.Identity, signedIn.Host);
         if (located.Host == null)
         {
             return new Located(null, null, Message(StatusCodes.Status404NotFound, "Not found",
@@ -375,7 +393,7 @@ public static class UpgradePage
             session.Write(context, signedIn);
         }
 
-        return new Located(signedIn, located.PlanId, null);
+        return new Located(signedIn, located.Identity, null);
     }
 
     // The plan, if it is one for sale; null otherwise
@@ -423,6 +441,39 @@ public static class UpgradePage
     private static IResult SessionEnded() => Message(StatusCodes.Status401Unauthorized, "Not signed in",
         "Your session has ended. Sign in again to choose a plan.", "Sign in", SitePages.SignIn);
 
+    private static IResult TooSmall(Plan plan, PlanFit fit) => Message(StatusCodes.Status400BadRequest,
+        "Too small", $"{plan.Name} has {plan.Storage}. {fit.Note}: choose a plan with more room.", "Choose another plan",
+        Root);
+
     private static IResult NotForSale() => Message(StatusCodes.Status400BadRequest, "Not for sale",
         "That plan is not for sale.", "Choose another plan", Root);
+}
+
+/// <summary>
+/// How a plan compares with what the owner has now, as their host says: more room, the same, less, or too little for
+/// what they store, which they cannot choose
+/// </summary>
+/// <param name="Note">"440 GB more than now", "Less than you have now (1 TB)"; null when there is nothing to compare</param>
+/// <param name="IsMore">It has more room than they have now</param>
+public record PlanFit(string? Note, bool CanChoose, bool IsMore = false)
+{
+    public static PlanFit Of(Plan plan, IdentityOnHost? now)
+    {
+        if (now == null || UpgradePage.SamePlan(plan.Id, now.PlanId))
+        {
+            return new PlanFit(null, true);
+        }
+        if (now.UsedBytes is { } used && used >= plan.QuotaBytes)
+        {
+            return new PlanFit($"You store {StorageSize.Format(used)}", false);
+        }
+        return now.QuotaBytes switch
+        {
+            null => new PlanFit(null, true),
+            var quota when plan.QuotaBytes > quota =>
+                new PlanFit($"{StorageSize.Format(plan.QuotaBytes - quota.Value)} more than now", true, IsMore: true),
+            var quota when plan.QuotaBytes == quota => new PlanFit("The same space as now", true),
+            var quota => new PlanFit($"Less than you have now ({StorageSize.Format(quota.Value)})", true),
+        };
+    }
 }

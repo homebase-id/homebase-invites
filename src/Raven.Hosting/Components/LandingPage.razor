@@ -29,23 +29,23 @@
                 }
                 else
                 {
-                    <text>Signed in as <strong>@Identity</strong>.</text>
-                    @if (CurrentPlanName != null && !Shown.Any(p => UpgradePage.SamePlan(p.Id, CurrentPlanId)))
-                    {
-                        <text> Your plan is <strong>@CurrentPlanName</strong>.</text>
-                    }
-                    <text> Prices are in US dollars.</text>
+                    <text>Signed in as <strong>@Identity</strong>. Prices are in US dollars.</text>
                 }
             </p>
+
+            @if (Now != null)
+            {
+                <YourPlanNow Now="Now" PlanName="@(CurrentPlanName ?? "")" />
+            }
 
             <ul class="plans">
                 @if (Free != null)
                 {
-                    <PlanCard Plan="Free" IsFree="true" IsCurrent="UpgradePage.SamePlan(Free.Id, CurrentPlanId)" Action="@(Identity == null ? FreeAction : null)" />
+                    <PlanCard Plan="Free" IsFree="true" IsCurrent="UpgradePage.SamePlan(Free.Id, Now?.PlanId)" Action="@(Identity == null ? FreeAction : null)" />
                 }
                 @foreach (var plan in Plans)
                 {
-                    <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, CurrentPlanId)">
+                    <PlanCard Plan="plan" IsCurrent="UpgradePage.SamePlan(plan.Id, Now?.PlanId)" Fit="@(Now == null ? null : PlanFit.Of(plan, Now))">
                         <Action>
                             @if (Identity == null)
                             {
@@ -70,7 +70,9 @@
 @code {
     /// <summary>Who is signed in; null for a visitor</summary>
     [Parameter] public string? Identity { get; set; }
-    [Parameter] public string? CurrentPlanId { get; set; }
+
+    /// <summary>What the owner has now, as their host says; null for a visitor, or when the host cannot say</summary>
+    [Parameter] public IdentityOnHost? Now { get; set; }
 
     /// <summary>The name of the owner's plan; null when it is not known</summary>
     [Parameter] public string? CurrentPlanName { get; set; }
@@ -80,8 +82,6 @@
 
     /// <summary>The plans for sale</summary>
     [Parameter] public List<Plan> Plans { get; set; } = [];
-
-    private IEnumerable<Plan> Shown => Free == null ? Plans : Plans.Prepend(Free);
 
     private readonly RenderFragment FreeAction = @<a class="button" href="@SitePages.DefaultSignupUrl" data-signup>Create a free identity</a>;
 }

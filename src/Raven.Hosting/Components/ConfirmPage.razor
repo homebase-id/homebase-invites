@@ -1,9 +1,13 @@
 @* Step 2: the change, and how to pay *@
 <SitePage Title="Confirm your new plan" Step="1">
     <div class="card">
-        <p class="muted">Change your plan from <strong>@CurrentPlanName</strong> to</p>
+        <p class="muted">Change your plan from <strong>@CurrentPlanName</strong>@(Now?.QuotaBytes is { } quota ? $" ({StorageSize.Format(quota)})" : "") to</p>
         <h2>@Plan.Name</h2>
         <PlanDetails Plan="Plan" ShowPrices="false" />
+        @if (PlanFit.Of(Plan, Now) is { Note: { } note } fit)
+        {
+            <p class="@(fit.IsMore ? "fit more" : "fit")">@note</p>
+        }
     </div>
 
     <form method="get" action="@($"{UpgradePage.Root}/checkout")" class="card terms">
@@ -26,4 +30,7 @@
 @code {
     [Parameter] public Plan Plan { get; set; } = null!;
     [Parameter] public string CurrentPlanName { get; set; } = "";
+
+    /// <summary>What the owner has now, as their host says</summary>
+    [Parameter] public IdentityOnHost? Now { get; set; }
 }

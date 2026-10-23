@@ -241,9 +241,13 @@ Where an owner gets a bigger plan. Their owner console sends them to
    identity is here. The session is a data-protected cookie for the whole site, for an hour.
 3. **Choose** (`/upgrade`): the plans marked for sale as cards, by `sortOrder`: name, description, storage
    (`1 TB of storage`), whether there is a public home page, and its prices, each term with what it saves on paying
-   monthly when it does (`$50 / year save 17%`, against 12 times the monthly price). The identity's plan,
-   asked of its host as grants find it and matched by plan Id, is marked "Your plan"; when it is not one for sale
-   it is named above the cards.
+   monthly when it does (`$50 / year save 17%`, against 12 times the monthly price). Above them, **Your plan now**:
+   what the identity's host says it has (`GET /api/plans/v1/identities/{identity}`, asked as grants find it), which
+   may differ from what this service last set: the plan's name, how full it is ("12% of 60 GB used", then "7.2 GB
+   used · 52.8 GB free", by `StorageUse`, the owner console's rules), its public home page and whether it is full.
+   The card with its plan Id is marked "Your plan"; every other says how it compares ("940 GB more than now", "Less
+   than you have now (1 TB)"), and one smaller than what the identity stores cannot be chosen, confirmed or bought
+   (`PlanFit`). Anything a newer host adds to its answer is kept (`IdentityOnHost.More`).
 4. **Confirm** (`/upgrade/confirm?plan=<id>`): "Change your plan from A to B", then **How would you like to
    pay?**, one choice per term (the shortest chosen), and **Continue to checkout**.
 5. **Test checkout** (`/upgrade/checkout?plan=<id>&months=<term>`): an order summary with the term's price, and a

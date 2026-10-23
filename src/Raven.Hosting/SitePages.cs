@@ -52,7 +52,7 @@ public static class SitePages
                 var located = await UpgradePage.LocateAsync(context, signedIn, session, plans);
                 if (located.Error == null)
                 {
-                    parameters["CurrentPlanId"] = located.PlanId;
+                    parameters["Now"] = located.Now;
                     parameters["CurrentPlanName"] = all.FirstOrDefault(p => UpgradePage.SamePlan(p.Id, located.PlanId))?.Name
                                                     ?? located.PlanId ?? "none";
                 }

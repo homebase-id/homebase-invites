@@ -1,5 +1,5 @@
 @* One plan, as a card in a list of plans. Every card has the same parts in the same order (storage, name,
-   description, what it gives, prices, then the action), so on a desktop they line up across plans *@
+   description, what it gives, prices, then the choice), so on a desktop they line up across plans *@
 <li class="@(IsCurrent ? "card current" : "card")">
     <p class="storage">@Plan.Storage</p>
     <h2>@Plan.Name</h2>
@@ -15,18 +15,23 @@
             <li><PriceLabel Plan="Plan" Price="price" /></li>
         }
     </ul>
-    @if (IsCurrent)
-    {
-        <p class="badge">Your plan</p>
-    }
-    else if (Action != null)
-    {
-        @Action
-    }
-    else
-    {
-        <span class="no-action"></span>
-    }
+    <div class="choice">
+        @if (IsCurrent)
+        {
+            <p class="badge">Your plan</p>
+        }
+        else
+        {
+            @if (Fit?.Note != null)
+            {
+                <p class="@(Fit.IsMore ? "fit more" : "fit")">@Fit.Note</p>
+            }
+            @if (Fit?.CanChoose != false)
+            {
+                @Action
+            }
+        }
+    </div>
 </li>
 
 @code {
@@ -36,6 +41,9 @@
     /// <summary>The plan a new identity starts on: it says "Free" where the prices go</summary>
     [Parameter] public bool IsFree { get; set; }
 
-    /// <summary>The button, when it is not the owner's plan; none leaves the place empty</summary>
+    /// <summary>How it compares with what the owner has now; null for a visitor</summary>
+    [Parameter] public PlanFit? Fit { get; set; }
+
+    /// <summary>The button, when it is not the owner's plan and they can choose it; none leaves the place empty</summary>
     [Parameter] public RenderFragment? Action { get; set; }
 }
