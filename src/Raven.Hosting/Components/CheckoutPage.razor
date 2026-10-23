@@ -1,0 +1,34 @@
+@* Step 3: a test checkout. The card fields have no names, so the browser never sends them anywhere *@
+<SitePage Title="Checkout" Step="2">
+    <p class="banner" role="note"><strong>This is a test checkout.</strong> No payment is taken.</p>
+
+    <div class="card">
+        <h2>@Plan.Name</h2>
+        <PlanDetails Plan="Plan" ShowPrices="false" />
+        <p class="price">@Price.Text</p>
+        <p class="muted">For @Identity</p>
+    </div>
+
+    <form method="post" action="@($"{UpgradePage.Root}/checkout")" class="card checkout">
+        <AntiforgeryField Token="Antiforgery" />
+        <input type="hidden" name="planId" value="@Plan.Id">
+        <input type="hidden" name="months" value="@Price.Months">
+        <label>Name on card <input autocomplete="off" placeholder="Frodo Baggins"></label>
+        <label>Card number <input autocomplete="off" inputmode="numeric" placeholder="4242 4242 4242 4242"></label>
+        <div class="row">
+            <label>Expiry <input autocomplete="off" placeholder="MM / YY"></label>
+            <label>CVC <input autocomplete="off" inputmode="numeric" placeholder="123"></label>
+        </div>
+        <div class="actions">
+            <button type="submit">Complete purchase</button>
+            <a class="button secondary" href="@($"{UpgradePage.Root}/confirm?plan={Uri.EscapeDataString(Plan.Id)}")">Back</a>
+        </div>
+    </form>
+</SitePage>
+
+@code {
+    [Parameter] public Plan Plan { get; set; } = null!;
+    [Parameter] public PlanPrice Price { get; set; } = null!;
+    [Parameter] public string Identity { get; set; } = "";
+    [Parameter] public Microsoft.AspNetCore.Antiforgery.AntiforgeryTokenSet Antiforgery { get; set; } = null!;
+}

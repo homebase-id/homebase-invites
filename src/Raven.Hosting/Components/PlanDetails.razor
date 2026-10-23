@@ -1,0 +1,28 @@
+@* The description, what the plan gives, and what each term costs *@
+@if (ShowDescription && Plan.Description != "")
+{
+    <p>@Plan.Description</p>
+}
+<ul class="gives">
+    @if (ShowStorage)
+    {
+        <li>@Plan.Storage of storage</li>
+    }
+    <li>@(Plan.PublicWebPresence ? "A public home page" : "No public home page")</li>
+</ul>
+@if (ShowPrices && Plan.Prices.Count > 0)
+{
+    <ul class="prices">
+        @foreach (var price in Plan.Prices)
+        {
+            <li><PriceLabel Plan="Plan" Price="price" /></li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter, EditorRequired] public Plan Plan { get; set; } = null!;
+    [Parameter] public bool ShowDescription { get; set; } = true;
+    [Parameter] public bool ShowStorage { get; set; } = true;
+    [Parameter] public bool ShowPrices { get; set; } = true;
+}

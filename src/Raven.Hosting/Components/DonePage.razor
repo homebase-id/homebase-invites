@@ -1,0 +1,38 @@
+@* Step 4: what happened to the purchase *@
+<SitePage Title="@(Purchase.Status == PlanGrantStatus.Applied ? "Done" : "Thank you")" Step="3">
+    <div class="card">
+        @switch (Purchase.Status)
+        {
+            case PlanGrantStatus.Applied:
+                <h2>You're on @PlanName</h2>
+                @if (Plan != null)
+                {
+                    <PlanDetails Plan="Plan" ShowPrices="false" />
+                }
+                break;
+            case PlanGrantStatus.Pending:
+                <h2>Thank you</h2>
+                <p>Your purchase of @PlanName is recorded; your plan will change shortly.</p>
+                break;
+            default:
+                <h2>Something went wrong</h2>
+                <p>We could not change @Identity to @PlanName. Please contact us with reference @Purchase.Reference.</p>
+                break;
+        }
+        @if (Purchase is { PriceMonths: { } months, PriceAmountCents: { } cents })
+        {
+            <p class="price">@(new PlanPrice(months, cents).Text)</p>
+            <p class="muted">This was a test checkout: nothing was charged.</p>
+        }
+    </div>
+    <div class="actions">
+        <a class="button" href="@UpgradePage.ReturnUrl(Identity)">Back to your Homebase</a>
+    </div>
+</SitePage>
+
+@code {
+    [Parameter] public PlanGrant Purchase { get; set; } = null!;
+    [Parameter] public Plan? Plan { get; set; }
+    [Parameter] public string PlanName { get; set; } = "";
+    [Parameter] public string Identity { get; set; } = "";
+}

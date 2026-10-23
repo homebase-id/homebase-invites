@@ -1,0 +1,10 @@
+@* "$50 / year", and what it saves on paying monthly *@
+@Price.Text@if (Plan.Saving(Price) is { } saving)
+{
+    <span class="save">save @(saving)%</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Plan Plan { get; set; } = null!;
+    [Parameter, EditorRequired] public PlanPrice Price { get; set; } = null!;
+}

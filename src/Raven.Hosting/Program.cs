@@ -45,6 +45,8 @@ builder.Services.Configure<KeyManagementOptions>(options => options.XmlRepositor
 builder.Services.AddSingleton<YouAuthLogin>();
 builder.Services.AddSingleton<UpgradeSession>();
 builder.Services.AddHttpClient(YouAuthLogin.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
+// The upgrade page is Razor components (Components/), rendered on the server from its endpoints
+builder.Services.AddRazorComponents();
 builder.Services.AddAntiforgery(options =>
 {
     options.Cookie.Name = "raven_upgrade_antiforgery";
@@ -77,6 +79,16 @@ builder.Services.AddRateLimiter(options =>
 var app = builder.Build();
 
 app.UseForwardedHeaders();
+// The upgrade page's stylesheet and fonts (wwwroot/assets). The stylesheet's link carries a version from its content,
+// so it is kept a year; the fonts never change under the same name
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = file =>
+        file.Context.Response.Headers.CacheControl =
+            file.Context.Request.Query.ContainsKey("v") || file.File.Name.EndsWith(".ttf")
+                ? "public, max-age=31536000, immutable"
+                : "no-cache",
+});
 app.UseRateLimiter();
 app.Use(InvitationCodeApi.RequireApiKey);
 app.UseAntiforgery();
