@@ -65,7 +65,7 @@ public class PlanGrantApiTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         var grant = (await response.Content.ReadFromJsonAsync<PlanGrant>())!;
         Assert.That(grant with { Id = 0, CreatedAt = 0, UpdatedAt = 0, AppliedAt = null }, Is.EqualTo(new PlanGrant(
-            0, Frodo, "veterans", 1099511627776, true, "purchase", "pay_9", "applied", InvitationCodeServer.Hosts[1],
+            0, Frodo, "veterans", 1099511627776, true, null, null, "purchase", "pay_9", "applied", InvitationCodeServer.Hosts[1],
             InvitationCodeServer.Hosts[1], 1, null, null, 0, 0, null)));
         Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[1], Frodo), Is.EqualTo("veterans"));
         Assert.That(_server.IdentityHosts.HostsAsked()[0], Is.EqualTo(InvitationCodeServer.Hosts[1]), "the hint first");
@@ -106,6 +106,25 @@ public class PlanGrantApiTests
     }
 
     [Test]
+    public async Task AGrantRecordsTheTermBoughtAtItsPrice()
+    {
+        var grant = await GrantAsync(new { identity = Frodo, planId = "veterans", source = "purchase", months = 24 });
+
+        Assert.That((grant.PriceMonths, grant.PriceAmountCents), Is.EqualTo((24, 9000L)));
+        Assert.That((await GrantAsync(new { identity = Frodo, planId = "veterans" })).PriceMonths, Is.Null,
+            "a grant with no term has no price");
+    }
+
+    [Test]
+    public async Task AGrantOfATermThePlanIsNotSoldForIsA400()
+    {
+        var response = await _admin.PostAsJsonAsync(Root + "/", new { identity = Frodo, planId = "veterans", months = 6 });
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(await response.Content.ReadAsStringAsync(), Does.Contain("has no price for 6 months"));
+    }
+
+        [Test]
     public async Task ListFiltersByIdentityAndStatus()
     {
         _server.IdentityHosts.Serve(InvitationCodeServer.Hosts[0], Frodo);

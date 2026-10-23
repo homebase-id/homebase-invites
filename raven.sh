@@ -41,11 +41,12 @@ HOSTING PLANS  (create key)
   There are no built-in plans: create them before making codes for them.
 
   plans [--json]
-      Lists the plans as a table: id, name, storage, public page, for sale, price and sort order.
+      Lists the plans as a table: id, name, storage, public page, for sale, prices and sort order.
         --json              print the service's JSON instead of the table (the table needs jq)
 
   plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false
-              [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]
+              [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>]
+              [--description <text>]
       Makes a new plan and prints it.
         --id <plan id>                 required: letters, digits, '.', '_' and '-', e.g. veterans.
                                        Any case finds it; it cannot be changed later
@@ -53,16 +54,29 @@ HOSTING PLANS  (create key)
         --quota-bytes <n>              required: bytes it may store, more than 0, e.g. 1099511627776
                                        for 1 TB. There is no unlimited
         --public-web-presence true|false   required: whether it has a public home page
+        --price <months>:<dollars>     optional, once per billing term: what it costs, in US
+                                       dollars, for that many months (1 to 120), e.g.
+                                       --price 1:5 --price 12:50 --price 24:90 for \$5 a month,
+                                       \$50 a year or \$90 for two years. 0 is free. Owners pick a
+                                       term at checkout; the page shows what longer terms save
         --for-sale true|false          optional, false by default: whether owners can buy it on
-                                       the upgrade page
-        --price <text>                 optional: shown to buyers, e.g. "\$5 a month"
+                                       the upgrade page. A plan for sale needs a price
         --sort-order <n>               optional, 0 by default: plans are listed by it, then by id
         --description <text>           optional: a line shown on its card
 
   plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false]
-            [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]
+            [--for-sale true|false] [--sort-order <n>] [--description <text>]
       Changes only what you give. Identities already on the plan keep what they were given; the
       change applies to the next signup or purchase. To retire a plan, use --for-sale false.
+      Prices are changed with plan-price.
+
+  plan-price <plan id> <months> <dollars>
+      Sets what the plan costs for that many months: adds the term, or changes its price.
+      e.g. ./raven.sh plan-price veterans 12 45 for \$45 a year. Purchases already made keep the
+      price they were made at.
+  plan-price <plan id> <months> --remove
+      Stops selling the plan for that term. [409] means it is the last price of a plan for
+      sale: mark it not for sale first, or add another price.
 
   plan-delete <plan id>
       Deletes a plan no code or grant uses. [409] means one does: mark it not for sale instead.
@@ -139,8 +153,11 @@ TEST A CODE  (signup key; odin-core does these during a real signup)
 
 EXAMPLES
   ./raven.sh plan-create --id veterans --name Veterans --quota-bytes 1099511627776
-                          --public-web-presence true --for-sale true --price "\$5 a month"
-      a 1 TB plan with a public home page, for sale on the upgrade page
+                          --public-web-presence true --price 1:5 --price 12:50 --for-sale true
+      a 1 TB plan with a public home page, for sale at \$5 a month or \$50 a year
+
+  ./raven.sh plan-price veterans 24 90
+      also sell it for two years at \$90
 
   ./raven.sh plan-edit veterans --for-sale false
       stop selling it; identities on it keep it
@@ -188,7 +205,7 @@ plan_fields() { # usage [option value]...; the plan options as JSON fields, in t
   fields=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --name|--description|--price)
+      --name|--description)
         [[ $# -ge 2 ]] || die "$usage"
         fields+=("\"${1#--}\":$(json_string "$2")"); shift 2 ;;
       --quota-bytes)
@@ -205,6 +222,16 @@ plan_fields() { # usage [option value]...; the plan options as JSON fields, in t
     esac
   done
 }
+
+# Dollars as typed (5, 4.99, 4.5) in cents; dies with the message given for anything else
+to_cents() { # dollars message
+  [[ "$1" =~ ^([0-9]+)(\.([0-9]{1,2}))?$ ]] || die "$2"
+  local cents="${BASH_REMATCH[3]:-00}"
+  [[ ${#cents} -eq 1 ]] && cents="${cents}0"
+  printf '%d' $(( 10#${BASH_REMATCH[1]} * 100 + 10#$cents ))
+}
+
+price_usage="--price must be <months>:<dollars>, e.g. --price 12:50 for \$50 a year"
 
 # A JSON string, quotes included
 json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
@@ -248,7 +275,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  plans|plan-create|plan-edit|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
+  plans|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
   validate|use|undo) need RAVEN_HOSTING_SIGNUP_KEY; key="$RAVEN_HOSTING_SIGNUP_KEY" ;;
 esac
 
@@ -317,9 +344,10 @@ INTRO
       def pad(n): . + (" " * ([n - length, 0] | max));
       def clip(n): if length > n then .[0:n - 3] + "..." else . end;
       . as $plans
-      | ["ID", "NAME", "STORAGE", "PUBLIC PAGE", "FOR SALE", "PRICE", "ORDER"] as $head
+      | ["ID", "NAME", "STORAGE", "PUBLIC PAGE", "FOR SALE", "PRICES", "ORDER"] as $head
       | [$plans[] | [.id, (.name | clip(30)), .storage, (if .publicWebPresence then "yes" else "no" end),
-                     (if .forSale then "yes" else "no" end), (if .price == "" then "-" else .price | clip(30) end),
+                     (if .forSale then "yes" else "no" end),
+                     (if (.prices | length) == 0 then "-" else [.prices[].text] | join(", ") end),
                      "\(.sortOrder)"]] as $rows
       | ([$head] + $rows) as $table
       | [range(0; $head | length) as $i | [$table[][$i] | length] | max] as $widths
@@ -328,12 +356,16 @@ INTRO
         end'
     ;;
   plan-create)
-    plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]  (see ./raven.sh help)"
-    plan_id=""; rest=()
+    plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>] [--description <text>]  (see ./raven.sh help)"
+    plan_id=""; rest=(); prices=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --id) [[ -n "${2:-}" ]] || die "$plan_create_usage"
               plan_id="$2"; shift 2 ;;
+        --price) [[ "${2:-}" =~ ^([0-9]+):(.+)$ ]] || die "$price_usage"
+                 months="${BASH_REMATCH[1]}"
+                 cents="$(to_cents "${BASH_REMATCH[2]}" "$price_usage")" || exit 1
+                 prices+=("{\"months\":$((10#$months)),\"amountCents\":$cents}"); shift 2 ;;
         *) rest+=("$1"); shift ;;
       esac
     done
@@ -342,16 +374,28 @@ INTRO
     [[ -n "$plan_id" && "$joined" == *'"name":'* && "$joined" == *'"quotaBytes":'* &&
        "$joined" == *'"publicWebPresence":'* ]] || die "$plan_create_usage"
     fields+=("\"id\":$(json_string "$plan_id")")
+    [[ ${#prices[@]} -gt 0 ]] && fields+=("\"prices\":[$(IFS=,; echo "${prices[*]}")]")
     base="$PLANS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
     ;;
   plan-edit)
-    plan_edit_usage="usage: ./raven.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]"
+    plan_edit_usage="usage: ./raven.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--for-sale true|false] [--sort-order <n>] [--description <text>]  (prices: plan-price)"
     plan_id="${1:-}"
     check_plan_id "$plan_id" "$plan_edit_usage"
     shift
     plan_fields "$plan_edit_usage" "$@"
     [[ ${#fields[@]} -gt 0 ]] || die "nothing to change" "$plan_edit_usage"
     base="$PLANS" call PATCH "/$plan_id" "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  plan-price)
+    plan_price_usage="usage: ./raven.sh plan-price <plan id> <months> <dollars>, or <plan id> <months> --remove"
+    check_plan_id "${1:-}" "$plan_price_usage"
+    [[ "${2:-}" =~ ^[0-9]+$ && $# -eq 3 ]] || die "$plan_price_usage"
+    if [[ "$3" == "--remove" ]]; then
+      base="$PLANS" call DELETE "/$1/prices/$((10#$2))"
+    else
+      cents="$(to_cents "$3" "<dollars> must be an amount in dollars, e.g. 50 or 4.99")" || exit 1
+      base="$PLANS" call PUT "/$1/prices/$((10#$2))" "{\"amountCents\":$cents}"
+    fi
     ;;
   plan-delete)
     check_plan_id "${1:-}" "usage: ./raven.sh plan-delete <plan id>"

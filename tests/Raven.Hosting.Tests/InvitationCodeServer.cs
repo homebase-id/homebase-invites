@@ -18,14 +18,17 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
     bool seedPlans = true)
     : WebApplicationFactory<Program>
 {
-    /// <summary>The plans the database starts with: two for sale (registered, then veterans), three not</summary>
+    /// <summary>
+    /// The plans the database starts with: two for sale (registered, yearly only, then veterans, monthly, yearly and
+    /// for two years), three not
+    /// </summary>
     public static readonly PlanRequest[] Plans =
     [
         new("free", "Free", 64424509440, true),
         new("pro-100gb", "Pro", 107374182400, true),
-        new("registered", "Registered", 10737418240, true, ForSale: true, SortOrder: 1),
+        new("registered", "Registered", 10737418240, true, ForSale: true, Prices: [new(12, 1000)], SortOrder: 1),
         new("veterans", "Veterans", 1099511627776, true, ForSale: true, Description: "For those who served",
-            Price: "$5 a month", SortOrder: 2),
+            Prices: [new(1, 500), new(12, 5000), new(24, 9000)], SortOrder: 2),
         new("tiny-test", "Tiny test", 1048576, false),
     ];
 

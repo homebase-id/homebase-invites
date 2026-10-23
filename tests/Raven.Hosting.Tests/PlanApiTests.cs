@@ -61,7 +61,7 @@ public class PlanApiTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         var created = (await response.Content.ReadFromJsonAsync<Plan>())!;
         Assert.That(created with { CreatedAt = 0, UpdatedAt = 0 }, Is.EqualTo(new Plan("Gold", "Gold plan", "Shiny",
-            5368709120, false, true, "$2 a month", 1, 0, 0)));
+            5368709120, false, true, [new(1, 200), new(12, 2000)], 1, 0, 0)), "prices shortest term first");
         Assert.That(created.Storage, Is.EqualTo("5 GB"));
         Assert.That(await _admin.GetFromJsonAsync<Plan>(Root + "/gold"), Is.EqualTo(created));
 
@@ -78,7 +78,7 @@ public class PlanApiTests
             new { id = "plain", name = "Plain", quotaBytes = 1, publicWebPresence = true });
 
         var plan = (await response.Content.ReadFromJsonAsync<Plan>())!;
-        Assert.That((plan.ForSale, plan.Price, plan.Description, plan.SortOrder), Is.EqualTo((false, "", "", 0)));
+        Assert.That((plan.ForSale, plan.Prices.Count, plan.Description, plan.SortOrder), Is.EqualTo((false, 0, "", 0)));
     }
 
     [Test]
@@ -86,11 +86,11 @@ public class PlanApiTests
     {
         var before = (await _admin.GetFromJsonAsync<Plan>(Root + "/veterans"))!;
 
-        var response = await _admin.PatchAsJsonAsync(Root + "/VETERANS", new { forSale = false, price = "" });
+        var response = await _admin.PatchAsJsonAsync(Root + "/VETERANS", new { forSale = false, sortOrder = 5 });
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         var after = (await response.Content.ReadFromJsonAsync<Plan>())!;
-        Assert.That(after with { UpdatedAt = 0 }, Is.EqualTo(before with { ForSale = false, Price = "", UpdatedAt = 0 }));
+        Assert.That(after with { UpdatedAt = 0 }, Is.EqualTo(before with { ForSale = false, SortOrder = 5, UpdatedAt = 0 }));
         Assert.That(after.UpdatedAt, Is.GreaterThanOrEqualTo(before.UpdatedAt));
         Assert.That((await _admin.PatchAsJsonAsync(Root + "/silver", new { forSale = false })).StatusCode,
             Is.EqualTo(HttpStatusCode.NotFound));
@@ -179,5 +179,85 @@ public class PlanApiTests
     //
 
     private static readonly PlanRequest Gold = new("Gold", "Gold plan", 5368709120, false, ForSale: true,
-        Description: "Shiny", Price: "$2 a month", SortOrder: 1);
+        Description: "Shiny", Prices: [new(12, 2000), new(1, 200)], SortOrder: 1);
+
+    //
+    // Prices
+    //
+
+    [Test]
+    public async Task APriceIsAddedChangedAndRemoved()
+    {
+        var added = await _admin.PutAsJsonAsync(Root + "/Veterans/prices/36", new { amountCents = 12000 });
+        Assert.That(added.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That((await added.Content.ReadFromJsonAsync<Plan>())!.Prices.Select(p => p.Months),
+            Is.EqualTo(new[] { 1, 12, 24, 36 }));
+
+        var changed = (await (await _admin.PutAsJsonAsync(Root + "/veterans/prices/12", new { amountCents = 4500 }))
+            .Content.ReadFromJsonAsync<Plan>())!;
+        Assert.That(changed.PriceFor(12), Is.EqualTo(new PlanPrice(12, 4500)));
+
+        var removed = await _admin.DeleteAsync(Root + "/veterans/prices/36");
+        Assert.That(removed.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That((await removed.Content.ReadFromJsonAsync<Plan>())!.PriceFor(36), Is.Null);
+        Assert.That((await _admin.DeleteAsync(Root + "/veterans/prices/36")).StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That((await _admin.PutAsJsonAsync(Root + "/silver/prices/1", new { amountCents = 1 })).StatusCode,
+            Is.EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task APriceSaysWhatItIsInWords()
+    {
+        var plan = (await _admin.GetFromJsonAsync<Plan>(Root + "/veterans"))!;
+        var json = await _admin.GetStringAsync(Root + "/veterans");
+
+        Assert.That(plan.Prices.Select(p => p.Text), Is.EqualTo(new[] { "$5 / month", "$50 / year", "$90 / 2 years" }));
+        Assert.That(json, Does.Contain("\"text\":\"$50 / year\""));
+    }
+
+    [TestCase(0, 100, "between 1 and 120", TestName = "a price for 0 months")]
+    [TestCase(121, 100, "between 1 and 120", TestName = "a price for too many months")]
+    [TestCase(12, -1, "cannot be negative", TestName = "a negative price")]
+    public async Task ABadPriceIsA400(int months, long amountCents, string message)
+    {
+        var response = await _admin.PutAsJsonAsync($"{Root}/veterans/prices/{months}", new { amountCents });
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(await response.Content.ReadAsStringAsync(), Does.Contain(message));
+    }
+
+    [Test]
+    public async Task APlanForSaleNeedsAPrice()
+    {
+        var created = await _admin.PostAsJsonAsync(Root + "/", new PlanRequest("bare", "Bare", 1, true, ForSale: true));
+        Assert.That(created.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(await created.Content.ReadAsStringAsync(), Does.Contain("needs at least one price"));
+
+        var offSale = await _admin.PatchAsJsonAsync(Root + "/tiny-test", new { forSale = true });
+        Assert.That(offSale.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), "tiny-test has no price");
+
+        var lastPrice = await _admin.DeleteAsync(Root + "/registered/prices/12");
+        Assert.That(lastPrice.StatusCode, Is.EqualTo(HttpStatusCode.Conflict), "registered's only price");
+        Assert.That(await lastPrice.Content.ReadAsStringAsync(), Does.Contain("mark it not for sale first"));
+    }
+
+    [Test]
+    public async Task TwoPricesForOneTermAreRefused()
+    {
+        var response = await _admin.PostAsJsonAsync(Root + "/",
+            new PlanRequest("twice", "Twice", 1, true, Prices: [new(12, 100), new(12, 200)]));
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+    }
+
+    [Test]
+    public async Task DeletingAPlanDeletesItsPrices()
+    {
+        await _admin.PutAsJsonAsync(Root + "/tiny-test/prices/1", new { amountCents = 100 });
+        Assert.That((await _admin.DeleteAsync(Root + "/tiny-test")).StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+
+        var again = await _admin.PostAsJsonAsync(Root + "/", new PlanRequest("tiny-test", "Tiny test", 1, false));
+
+        Assert.That((await again.Content.ReadFromJsonAsync<Plan>())!.Prices, Is.Empty, "no price left behind");
+    }
 }

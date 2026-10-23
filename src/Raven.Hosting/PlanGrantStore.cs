@@ -10,6 +10,8 @@ namespace Raven.Hosting;
 /// <param name="QuotaBytes">The plan's quota when the grant was made, sent to the host with the plan; null on grants
 /// made before plans were kept here, which send the plan Id alone</param>
 /// <param name="PublicWebPresence">The plan's public web presence when the grant was made; null like QuotaBytes</param>
+/// <param name="PriceMonths">For a purchase, the billing term bought (12 is a year); null for a grant with no price</param>
+/// <param name="PriceAmountCents">What that term cost when bought, in US cents; null like PriceMonths</param>
 /// <param name="Host">The provisioning domain of the host the plan was set on; null until it was</param>
 /// <param name="HostHint">The host the request said the identity is on; tried first, if it is a known host</param>
 /// <param name="Source">Why the identity is owed it: <c>code</c>, <c>purchase</c> or <c>admin</c></param>
@@ -24,6 +26,8 @@ public record PlanGrant(
     string PlanId,
     long? QuotaBytes,
     bool? PublicWebPresence,
+    int? PriceMonths,
+    long? PriceAmountCents,
     string Source,
     string Reference,
     string Status,
@@ -89,12 +93,12 @@ public class PlanGrantStore
     //
 
     /// <summary>
-    /// Makes a pending grant of the plan with what it gives now, or returns the one already made with this
-    /// reference. A reference reused for another identity or plan is refused.
+    /// Makes a pending grant of the plan with what it gives now, and the price it was bought at if any, or returns
+    /// the one already made with this reference. A reference reused for another identity or plan is refused.
     /// </summary>
     /// <returns>The grant, and whether this call made it</returns>
-    public async Task<(PlanGrant Grant, bool Created)> CreateAsync(string? identity, Plan plan, string? source,
-        string? reference, string? hostHint, long now)
+    public async Task<(PlanGrant Grant, bool Created)> CreateAsync(string? identity, Plan plan, PlanPrice? price,
+        string? source, string? reference, string? hostHint, long now)
     {
         var normalizedIdentity = DomainNames.Normalize(identity) ??
                                  throw new InvalidPlanGrantRequestException("Invalid identity");
@@ -120,10 +124,11 @@ public class PlanGrantStore
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO plan_grants (identity, plan_id, quota_bytes, public_web_presence, source, reference, status,
-                                     host_hint, attempts, next_attempt_at, created_at, updated_at)
-            VALUES (@identity, @planId, @quotaBytes, @publicWebPresence, @source, @reference, 'pending', @hostHint, 0,
-                    @now, @now, @now)
+            INSERT INTO plan_grants (identity, plan_id, quota_bytes, public_web_presence, price_months,
+                                     price_amount_cents, source, reference, status, host_hint, attempts,
+                                     next_attempt_at, created_at, updated_at)
+            VALUES (@identity, @planId, @quotaBytes, @publicWebPresence, @priceMonths, @priceAmountCents, @source,
+                    @reference, 'pending', @hostHint, 0, @now, @now, @now)
             ON CONFLICT (reference) DO NOTHING;
             SELECT changes();
             """;
@@ -131,6 +136,8 @@ public class PlanGrantStore
         command.Parameters.AddWithValue("@planId", plan.Id);
         command.Parameters.AddWithValue("@quotaBytes", plan.QuotaBytes);
         command.Parameters.AddWithValue("@publicWebPresence", plan.PublicWebPresence);
+        command.Parameters.AddWithValue("@priceMonths", (object?)price?.Months ?? DBNull.Value);
+        command.Parameters.AddWithValue("@priceAmountCents", (object?)price?.AmountCents ?? DBNull.Value);
         command.Parameters.AddWithValue("@source", normalizedSource);
         command.Parameters.AddWithValue("@reference", normalizedReference);
         command.Parameters.AddWithValue("@hostHint", (object?)normalizedHint ?? DBNull.Value);
@@ -305,7 +312,7 @@ public class PlanGrantStore
 
     private const string Select =
         """
-        SELECT id, identity, plan_id, quota_bytes, public_web_presence, source, reference, status, host, host_hint, attempts, last_error, next_attempt_at,
+        SELECT id, identity, plan_id, quota_bytes, public_web_presence, price_months, price_amount_cents, source, reference, status, host, host_hint, attempts, last_error, next_attempt_at,
                created_at, updated_at, applied_at
         FROM plan_grants
         """;
@@ -365,17 +372,19 @@ public class PlanGrantStore
             reader.GetString(2),
             Number(3),
             Flag(4),
-            reader.GetString(5),
-            reader.GetString(6),
+            reader.IsDBNull(5) ? null : reader.GetInt32(5),
+            Number(6),
             reader.GetString(7),
-            Text(8),
-            Text(9),
-            reader.GetInt32(10),
+            reader.GetString(8),
+            reader.GetString(9),
+            Text(10),
             Text(11),
-            Number(12),
-            reader.GetInt64(13),
-            reader.GetInt64(14),
-            Number(15));
+            reader.GetInt32(12),
+            Text(13),
+            Number(14),
+            reader.GetInt64(15),
+            reader.GetInt64(16),
+            Number(17));
     }
 
     private async Task<SqliteConnection> OpenAsync()
@@ -420,6 +429,8 @@ public class PlanGrantStore
                     plan_id TEXT NOT NULL,
                     quota_bytes INTEGER NULL,
                     public_web_presence INTEGER NULL,
+                    price_months INTEGER NULL,
+                    price_amount_cents INTEGER NULL,
                     source TEXT NOT NULL,
                     reference TEXT NOT NULL UNIQUE,
                     status TEXT NOT NULL,
@@ -445,6 +456,9 @@ public class PlanGrantStore
             // Grants made before plans were kept here lack what the plan gave
             await AddColumnIfMissingAsync(connection, "quota_bytes", "INTEGER NULL");
             await AddColumnIfMissingAsync(connection, "public_web_presence", "INTEGER NULL");
+            // and the price a purchase was made at
+            await AddColumnIfMissingAsync(connection, "price_months", "INTEGER NULL");
+            await AddColumnIfMissingAsync(connection, "price_amount_cents", "INTEGER NULL");
 
             _initialized = true;
         }
