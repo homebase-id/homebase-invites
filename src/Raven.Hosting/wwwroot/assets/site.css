@@ -731,6 +731,14 @@ button:hover,
 }
 
 button.secondary,
+button:disabled,
+button:disabled:hover {
+  border-color: var(--line);
+  background: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 .button.secondary {
   background: transparent;
   border-color: var(--line);

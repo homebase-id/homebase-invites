@@ -17,6 +17,7 @@ API="$URL/api/v1/invitation-codes"
 PLANS="$URL/api/v1/plans"
 GRANTS="$URL/api/v1/plans/grants"
 REPORTS="$URL/api/v1/reports"
+PURCHASES="$URL/api/v1/purchases"
 
 usage() {
   cat <<EOF
@@ -161,6 +162,20 @@ GRANT A PLAN  (create key)
 
   retry <grant id>
       Tries a pending or failed grant again now, e.g. once the identity is on a host.
+
+WHO MAY BUY  (create key)
+  Until real card processing is in, buying a plan on the upgrade page is locked: everyone can see
+  the plans and sign in, but only testers can check out. A new service starts locked, with no
+  testers. Admin grants (grant) are not affected.
+
+  purchases [--json]
+      Shows whether purchases are open, and the testers.
+  purchases open | close
+      Lets everyone buy, or only the testers.
+  purchases allow <identity>
+      Lets this identity buy while purchases are closed.
+  purchases disallow <identity>
+      Takes it off the testers.
 
 CONTENT REPORTS  (create key)
   reports [--since <days>] [--json]
@@ -310,7 +325,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry|reports) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
+  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry|reports|purchases) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
   validate|use|undo) need RAVEN_HOSTING_SIGNUP_KEY; key="$RAVEN_HOSTING_SIGNUP_KEY" ;;
 esac
 
@@ -591,6 +606,32 @@ INTRO
     done
     [[ " ${fields[*]-} " == *'"identity":'* && " ${fields[*]-} " == *'"planId":'* ]] || die "$grant_usage"
     base="$GRANTS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  purchases)
+    purchases_usage="usage: ./raven.sh purchases [--json] | open | close | allow <identity> | disallow <identity>"
+    case "${1:-}" in
+      ""|--json)
+        as_json=false; [[ "${1:-}" == "--json" ]] && as_json=true
+        base="$PURCHASES" render "$as_json" "/" '
+          def when: . / 1000 | floor | strftime("%Y-%m-%d %H:%M UTC");
+          (if .open then "Purchases are OPEN: anyone signed in can buy a plan."
+           else "Purchases are CLOSED: only the testers can buy a plan." end),
+          "",
+          (if (.testers | length) == 0 then "(no testers)"
+           else "Testers:", (.testers[] | "  \(.identity)  (added \(.addedAt | when))") end)'
+        ;;
+      open|close)
+        [[ $# -eq 1 ]] || die "$purchases_usage"
+        open=false; [[ "$1" == open ]] && open=true
+        base="$PURCHASES" call PUT /open "{\"open\":$open}"
+        ;;
+      allow|disallow)
+        [[ $# -eq 2 && "$2" =~ ^[A-Za-z0-9.-]+$ ]] || die "$purchases_usage"
+        method=PUT; [[ "$1" == disallow ]] && method=DELETE
+        base="$PURCHASES" call "$method" "/testers/$2"
+        ;;
+      *) die "$purchases_usage" ;;
+    esac
     ;;
   reports)
     reports_usage="usage: ./raven.sh reports [--since <days>] [--json]"
