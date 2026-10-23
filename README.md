@@ -91,6 +91,10 @@ grant.
 | `sortOrder` | plans are listed, and the upgrade page's cards shown, by this, then by `id`; `0` by default |
 | `createdAt`, `updatedAt` | unix ms |
 
+Each plan is kept as one row: its `id`, and a JSON document with everything else, prices included. A new field is
+a new property in the document rather than a new column, and a document from before a field existed reads it as
+its default. The first plans table, a column per field, is moved into documents the first time the service starts.
+
 Editing a plan changes nothing for identities already on it: a grant keeps what the plan gave when it was made,
 and an identity that signed up with a code keeps what it got then. The change applies to the next signup or
 purchase. A plan cannot be deleted while a code or a grant uses it; to retire one, mark it not for sale.
