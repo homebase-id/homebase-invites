@@ -18,6 +18,7 @@ PLANS="$URL/api/v1/plans"
 GRANTS="$URL/api/v1/plans/grants"
 REPORTS="$URL/api/v1/reports"
 PURCHASES="$URL/api/v1/purchases"
+ADMINS="$URL/api/v1/admins"
 
 usage() {
   cat <<EOF
@@ -162,6 +163,17 @@ GRANT A PLAN  (create key)
 
   retry <grant id>
       Tries a pending or failed grant again now, e.g. once the identity is on a host.
+
+ADMIN PAGES  (create key)
+  The admin pages, at /admin on the site, do everything this script does with the create key, for
+  admins signed in with their own Homebase identity. Nobody is an admin until added here.
+
+  admins [--json]
+      Lists the admins.
+  admins add <identity>
+      Lets this identity use the admin pages, e.g. ./raven.sh admins add toddmitchell.me
+  admins remove <identity>
+      Takes it off the admins.
 
 WHO MAY BUY  (create key)
   Until real card processing is in, buying a plan on the upgrade page is locked: everyone can see
@@ -325,7 +337,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry|reports|purchases) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
+  plans|plan|plan-create|plan-edit|plan-price|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry|reports|purchases|admins) need RAVEN_HOSTING_CREATE_KEY; key="$RAVEN_HOSTING_CREATE_KEY" ;;
   validate|use|undo) need RAVEN_HOSTING_SIGNUP_KEY; key="$RAVEN_HOSTING_SIGNUP_KEY" ;;
 esac
 
@@ -606,6 +618,24 @@ INTRO
     done
     [[ " ${fields[*]-} " == *'"identity":'* && " ${fields[*]-} " == *'"planId":'* ]] || die "$grant_usage"
     base="$GRANTS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  admins)
+    admins_usage="usage: ./raven.sh admins [--json] | add <identity> | remove <identity>"
+    case "${1:-}" in
+      ""|--json)
+        as_json=false; [[ "${1:-}" == "--json" ]] && as_json=true
+        base="$ADMINS" render "$as_json" "/" '
+          def when: . / 1000 | floor | strftime("%Y-%m-%d %H:%M UTC");
+          if length == 0 then "(no admins; add one with ./raven.sh admins add <identity>)"
+          else .[] | "\(.identity)  (added \(.addedAt | when))" end'
+        ;;
+      add|remove)
+        [[ $# -eq 2 && "$2" =~ ^[A-Za-z0-9.-]+$ ]] || die "$admins_usage"
+        method=PUT; [[ "$1" == remove ]] && method=DELETE
+        base="$ADMINS" call "$method" "/$2"
+        ;;
+      *) die "$admins_usage" ;;
+    esac
     ;;
   purchases)
     purchases_usage="usage: ./raven.sh purchases [--json] | open | close | allow <identity> | disallow <identity>"

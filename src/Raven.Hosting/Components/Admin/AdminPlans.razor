@@ -1,0 +1,60 @@
+@* Every plan, in the order they are listed on the site *@
+<AdminLayout Admin="Admin" Title="Plans" Section="plans">
+    <Actions>
+        <a class="btn" href="@($"{AdminPages.Root}/plans/new")">New plan</a>
+    </Actions>
+    <ChildContent>
+        <div class="panel">
+            @if (Plans.Count == 0)
+            {
+                <p class="text-sm text-muted">No plans yet. Make one before making codes for it.</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Order</th><th>Plan</th><th>Storage</th><th>Public page</th><th>Public email</th>
+                                <th>Aliases</th><th>For sale</th><th>Recommended</th><th>Prices</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-line">
+                            @foreach (var plan in Plans)
+                            {
+                                <tr>
+                                    <td class="tabular-nums text-muted">@plan.SortOrder</td>
+                                    <td>
+                                        <a class="link" href="@AdminPages.PlanUrl(plan.Id)">@plan.Name</a>
+                                        <span class="block text-xs text-muted">@plan.Id</span>
+                                    </td>
+                                    <td class="whitespace-nowrap">@plan.Storage</td>
+                                    <td><YesNo Value="plan.PublicWebPresence" /></td>
+                                    <td><YesNo Value="plan.PublicEmail" /></td>
+                                    <td class="tabular-nums">@plan.EmailAliases</td>
+                                    <td><YesNo Value="plan.ForSale" /></td>
+                                    <td><YesNo Value="plan.Recommended" /></td>
+                                    <td class="text-xs">
+                                        @if (plan.Prices.Count == 0)
+                                        {
+                                            <span class="text-muted">none</span>
+                                        }
+                                        @foreach (var price in plan.Prices)
+                                        {
+                                            <span class="block whitespace-nowrap">@price.Text</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </ChildContent>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+}

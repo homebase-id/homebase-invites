@@ -1,0 +1,106 @@
+@* One code: whether it works, changing it, disabling it, and taking or giving back a use as a signup would *@
+<AdminLayout Admin="Admin" Title="@Code.Code" Section="codes">
+    <Actions>
+        <a class="btn btn-secondary" href="@($"{AdminPages.Root}/codes")">All codes</a>
+    </Actions>
+    <ChildContent>
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <section class="panel">
+                <h2 class="panel-title">Can it be used?</h2>
+                <p class="flex items-center gap-2 text-sm">
+                    @if (Code.Disabled)
+                    {
+                        <StatusTag Text="no: disabled" Tone="bad" />
+                    }
+                    else if (Code.UsesLeft == 0)
+                    {
+                        <StatusTag Text="no: used up" Tone="warn" />
+                    }
+                    else
+                    {
+                        <StatusTag Text="yes" Tone="good" />
+                    }
+                </p>
+                <dl class="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                    <dt class="text-muted">Uses left</dt><dd class="tabular-nums">@Code.UsesLeft of @Code.MaxUses</dd>
+                    <dt class="text-muted">Plan</dt><dd>@(Code.PlanId ?? "the host's default")</dd>
+                    <dt class="text-muted">Owner</dt><dd>@(Code.Owner ?? "none")</dd>
+                </dl>
+                <form method="post" action="@($"{AdminPages.CodeUrl(Code.Code)}/{(Code.Disabled ? "enable" : "disable")}")" class="mt-5">
+                    <Csrf Admin="Admin" />
+                    @if (Code.Disabled)
+                    {
+                        <button type="submit" class="btn">Enable</button>
+                    }
+                    else
+                    {
+                        <button type="submit" class="btn btn-danger">Disable</button>
+                        <span class="field-hint">Stops it working, whatever uses it has left.</span>
+                    }
+                </form>
+            </section>
+
+            <form method="post" action="@AdminPages.CodeUrl(Code.Code)" class="panel lg:col-span-2">
+                <Csrf Admin="Admin" />
+                <h2 class="panel-title">Change it</h2>
+                <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+                    <label class="field">
+                        Uses allowed
+                        <input class="input" name="uses" type="number" min="1" max="@InvitationCodeStore.MaxUsesLimit" required value="@Value("uses", Code.MaxUses.ToString())">
+                        <span class="field-hint">Uses already taken still count: lowering it below them leaves none left.</span>
+                    </label>
+                    <label class="field">
+                        Plan
+                        <select class="input" name="planId" required>
+                            @if (Code.PlanId == null)
+                            {
+                                <option value="">Choose a plan</option>
+                            }
+                            @foreach (var plan in Plans)
+                            {
+                                <option value="@plan.Id" selected="@(Value("planId", Code.PlanId) == plan.Id)">@plan.Name (@plan.Storage)</option>
+                            }
+                        </select>
+                        <span class="field-hint">People who sign up with it from now on get this plan.</span>
+                    </label>
+                    <label class="field">
+                        Source
+                        <input class="input" name="source" maxlength="200" value="@Value("source", Code.Source)">
+                    </label>
+                    <label class="field">
+                        Owner
+                        <input class="input" name="owner" value="@Value("owner", Code.Owner)" autocapitalize="none" spellcheck="false" placeholder="none">
+                        <span class="field-hint">Empty takes it away from its owner.</span>
+                    </label>
+                </div>
+                <div class="mt-5"><button type="submit" class="btn">Save</button></div>
+            </form>
+        </div>
+
+        <section class="panel mt-6">
+            <h2 class="panel-title">Test a signup</h2>
+            <p class="mb-4 text-sm text-muted">Exactly what an identity host does during a real signup. Careful on real codes: a use taken here is one fewer for people.</p>
+            <div class="flex flex-wrap gap-2">
+                <form method="post" action="@($"{AdminPages.CodeUrl(Code.Code)}/use")" onsubmit="return confirm('Take one use of this code?')">
+                    <Csrf Admin="Admin" />
+                    <button type="submit" class="btn btn-secondary">Take a use</button>
+                </form>
+                <form method="post" action="@($"{AdminPages.CodeUrl(Code.Code)}/undo-use")" onsubmit="return confirm('Give back the latest use of this code?')">
+                    <Csrf Admin="Admin" />
+                    <button type="submit" class="btn btn-secondary">Give back a use</button>
+                </form>
+            </div>
+        </section>
+    </ChildContent>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter, EditorRequired] public InvitationCode Code { get; set; } = null!;
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    /// <summary>A form that was refused, shown as it was sent</summary>
+    [Parameter] public IFormCollection? Form { get; set; }
+
+    private string Value(string name, string? fallback) => AdminForm.Value(Form, name, fallback);
+}

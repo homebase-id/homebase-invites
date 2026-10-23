@@ -27,6 +27,10 @@ jobs:
       - name: Check the command line tools
         run: bash --version | head -1 && curl --version | head -1 && jq --version
 
+      # The admin pages' Tailwind stylesheet is committed; it must be what its sources build
+      - name: Check the admin stylesheet
+        run: ./build-admin-css.sh --check
+
       - name: Build
         run: dotnet build -c Release --warnaserror
 

@@ -1,0 +1,18 @@
+@* A grant's status, or a yes/no, as a coloured tag *@
+<span class="tag @Colours">@Text</span>
+
+@code {
+    /// <summary>pending, applied or failed; or any text, shown in Tone</summary>
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+
+    /// <summary>good, bad, warn or plain; from the text when it is a grant status</summary>
+    [Parameter] public string? Tone { get; set; }
+
+    private string Colours => (Tone ?? Text) switch
+    {
+        "applied" or "good" => "bg-green-tint text-green",
+        "failed" or "bad" => "bg-red-100 text-red-800",
+        "pending" or "warn" => "bg-amber-100 text-amber-800",
+        _ => "bg-line text-muted",
+    };
+}

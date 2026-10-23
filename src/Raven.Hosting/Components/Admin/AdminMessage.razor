@@ -1,0 +1,12 @@
+@* Something the admin asked for is not there *@
+<AdminLayout Admin="Admin" Title="Not found">
+    <div class="panel">
+        <p class="text-sm">@Message</p>
+        <p class="mt-4"><a class="link" href="@AdminPages.Root">Back to the overview</a></p>
+    </div>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter] public string Message { get; set; } = "";
+}

@@ -1,0 +1,177 @@
+@* A new plan, or one plan: what it gives and how it is listed, its prices, and deleting it *@
+<AdminLayout Admin="Admin" Title="@(Plan == null ? "New plan" : Plan.Name)" Section="plans">
+    <Actions>
+        <a class="btn btn-secondary" href="@($"{AdminPages.Root}/plans")">All plans</a>
+    </Actions>
+    <ChildContent>
+        <form method="post" action="@(Plan == null ? $"{AdminPages.Root}/plans/new" : AdminPages.PlanUrl(Plan.Id))" class="panel">
+            <Csrf Admin="Admin" />
+            <h2 class="panel-title">@(Plan == null ? "The plan" : "What it gives and how it is listed")</h2>
+            <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+                @if (Plan == null)
+                {
+                    <label class="field">
+                        Id
+                        <input class="input" name="id" required maxlength="64" pattern="[A-Za-z0-9._-]+" value="@Value("id", null)"
+                               autocapitalize="none" spellcheck="false" placeholder="veterans">
+                        <span class="field-hint">Letters, digits, '.', '_' and '-'. Codes and grants use it; it cannot be changed.</span>
+                    </label>
+                }
+                else
+                {
+                    <div class="field">
+                        Id
+                        <p class="mt-1 py-2 text-sm font-normal">@Plan.Id</p>
+                        <span class="field-hint">Made @AdminForm.When(Plan.CreatedAt), last changed @AdminForm.When(Plan.UpdatedAt).</span>
+                    </div>
+                }
+                <label class="field">
+                    Name
+                    <input class="input" name="name" required maxlength="100" value="@Value("name", Plan?.Name)" placeholder="Veterans">
+                    <span class="field-hint">What owners see.</span>
+                </label>
+                <label class="field md:col-span-2">
+                    Description
+                    <input class="input" name="description" maxlength="300" value="@Value("description", Plan?.Description)" placeholder="For those who served">
+                    <span class="field-hint">A line on its card; optional.</span>
+                </label>
+                <div class="field">
+                    Storage
+                    <div class="flex gap-2">
+                        <input class="input" name="quota" required inputmode="decimal" value="@Value("quota", Size.Amount)" placeholder="100">
+                        <select class="input w-28" name="unit">
+                            @foreach (var unit in new[] { "TB", "GB", "MB", "bytes" })
+                            {
+                                <option value="@unit" selected="@(Value("unit", Size.Unit) == unit)">@unit</option>
+                            }
+                        </select>
+                    </div>
+                    <span class="field-hint">1 TB is 1024 GB. More than 0; there is no unlimited.</span>
+                </div>
+                <label class="field">
+                    Sort order
+                    <input class="input" name="sortOrder" type="number" value="@Value("sortOrder", (Plan?.SortOrder ?? 0).ToString())">
+                    <span class="field-hint">Plans are listed by it, then by id.</span>
+                </label>
+                <label class="field">
+                    Email aliases
+                    <input class="input" name="emailAliases" type="number" min="0" value="@Value("emailAliases", (Plan?.EmailAliases ?? 0).ToString())">
+                    <span class="field-hint">Shown on its card only: email is on hold.</span>
+                </label>
+                <div class="flex flex-col gap-3 md:pt-6">
+                    <label class="check"><input type="checkbox" name="publicWebPresence" value="true" checked="@Checked("publicWebPresence", Plan?.PublicWebPresence ?? true)"> A public home page</label>
+                    <label class="check"><input type="checkbox" name="publicEmail" value="true" checked="@Checked("publicEmail", Plan?.PublicEmail ?? false)"> A public email address <span class="font-normal text-muted">(card only)</span></label>
+                    <label class="check"><input type="checkbox" name="forSale" value="true" checked="@Checked("forSale", Plan?.ForSale ?? false)"> For sale on the site <span class="font-normal text-muted">(needs a price)</span></label>
+                    <label class="check"><input type="checkbox" name="recommended" value="true" checked="@Checked("recommended", Plan?.Recommended ?? false)"> Recommended to visitors</label>
+                </div>
+            </div>
+
+            @if (Plan == null)
+            {
+                <h3 class="mt-8 mb-1 text-sm font-semibold">Prices, in US dollars</h3>
+                <p class="mb-3 text-xs text-muted">Leave a term empty to not sell it for that term; 0 is free. More terms can be added once it is made.</p>
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    @foreach (var months in AdminPages.NewPlanTerms)
+                    {
+                        <label class="field">
+                            Per @BillingTerm.Name(months)
+                            <input class="input" name="@($"price{months}")" inputmode="decimal" value="@Value($"price{months}", null)" placeholder="$">
+                        </label>
+                    }
+                </div>
+            }
+            else
+            {
+                <p class="mt-6 text-xs text-muted">Identities already on this plan keep what they were given; a change applies to the next signup or purchase.</p>
+            }
+
+            <div class="mt-6 flex flex-wrap gap-2">
+                <button type="submit" class="btn">@(Plan == null ? "Make the plan" : "Save")</button>
+                <a class="btn btn-secondary" href="@(Plan == null ? $"{AdminPages.Root}/plans" : AdminPages.PlanUrl(Plan.Id))">Cancel</a>
+            </div>
+        </form>
+
+        @if (Plan != null)
+        {
+            <section class="panel mt-6">
+                <h2 class="panel-title">Prices</h2>
+                @if (Plan.Prices.Count == 0)
+                {
+                    <p class="text-sm text-muted">No prices: it cannot be for sale until it has one.</p>
+                }
+                else
+                {
+                    <ul class="divide-y divide-line">
+                        @foreach (var price in Plan.Prices)
+                        {
+                            <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                                <span>
+                                    <span class="font-semibold">@price.Text</span>
+                                    @if (Plan.Saving(price) is { } saving)
+                                    {
+                                        <span class="tag ml-1 bg-green-tint text-green">save @saving%</span>
+                                    }
+                                    <span class="ml-1 text-xs text-muted">@price.Months month@(price.Months == 1 ? "" : "s")</span>
+                                </span>
+                                <form method="post" action="@($"{AdminPages.PlanUrl(Plan.Id)}/prices/{price.Months}/remove")"
+                                      onsubmit="return confirm('Stop selling the plan for this term?')">
+                                    <Csrf Admin="Admin" />
+                                    <button type="submit" class="btn btn-small btn-secondary">Remove</button>
+                                </form>
+                            </li>
+                        }
+                    </ul>
+                }
+                <form method="post" action="@($"{AdminPages.PlanUrl(Plan.Id)}/prices")" class="mt-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-[10rem_10rem_auto]">
+                    <Csrf Admin="Admin" />
+                    <label class="field">
+                        Months
+                        <input class="input" name="months" type="number" min="1" max="@BillingTerm.LongestMonths" required list="terms" placeholder="12">
+                        <datalist id="terms"><option value="1"></option><option value="3"></option><option value="6"></option><option value="12"></option><option value="24"></option><option value="36"></option></datalist>
+                    </label>
+                    <label class="field">
+                        Dollars
+                        <input class="input" name="dollars" inputmode="decimal" required placeholder="50">
+                    </label>
+                    <div><button type="submit" class="btn">Set price</button></div>
+                </form>
+                <p class="mt-2 text-xs text-muted">Setting a term it already has changes its price. Purchases already made keep what they paid.</p>
+            </section>
+
+            <section class="panel mt-6 border-red-200">
+                <h2 class="panel-title">Delete</h2>
+                @if (CodesUsing + GrantsUsing > 0)
+                {
+                    <p class="text-sm text-muted">@CodesUsing code(s) and @GrantsUsing grant(s) use this plan, so it cannot be deleted. To retire it, untick "For sale".</p>
+                }
+                else
+                {
+                    <p class="mb-3 text-sm text-muted">No code or grant uses it.</p>
+                    <form method="post" action="@($"{AdminPages.PlanUrl(Plan.Id)}/delete")" onsubmit="return confirm('Delete this plan for good?')">
+                        <Csrf Admin="Admin" />
+                        <button type="submit" class="btn btn-danger">Delete @Plan.Name</button>
+                    </form>
+                }
+            </section>
+        }
+    </ChildContent>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+
+    /// <summary>The plan; null for a new one</summary>
+    [Parameter] public Plan? Plan { get; set; }
+
+    /// <summary>A form that was refused, shown as it was sent</summary>
+    [Parameter] public IFormCollection? Form { get; set; }
+
+    [Parameter] public int CodesUsing { get; set; }
+    [Parameter] public int GrantsUsing { get; set; }
+
+    private (string Amount, string Unit) Size => Plan == null ? ("", "GB") : AdminForm.Size(Plan.QuotaBytes);
+
+    private string Value(string name, string? fallback) => AdminForm.Value(Form, name, fallback);
+
+    private bool Checked(string name, bool fallback) => AdminForm.Checked(Form, name, fallback);
+}

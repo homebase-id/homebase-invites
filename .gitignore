@@ -481,3 +481,6 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 data/
+
+# Tailwind CLI, downloaded by build-admin-css.sh
+.tools/

@@ -1,0 +1,104 @@
+@* Making a code, and the codes, newest first: all of them or one owner's *@
+<AdminLayout Admin="Admin" Title="Invitation codes" Section="codes">
+    <Actions>
+        <a class="btn btn-secondary" href="@($"{AdminPages.Root}/codes/stats")">How codes are doing</a>
+    </Actions>
+    <ChildContent>
+        <form method="post" action="@($"{AdminPages.Root}/codes")" class="panel">
+            <Csrf Admin="Admin" />
+            <h2 class="panel-title">Make a code</h2>
+            <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+                <label class="field">
+                    Uses
+                    <input class="input" name="uses" type="number" min="1" max="@InvitationCodeStore.MaxUsesLimit" required value="@Value("uses", "1")">
+                    <span class="field-hint">How many people can sign up with it.</span>
+                </label>
+                <label class="field">
+                    Plan
+                    <select class="input" name="planId" required>
+                        <option value="">Choose a plan</option>
+                        @foreach (var plan in Plans)
+                        {
+                            <option value="@plan.Id" selected="@(Value("planId", null) == plan.Id)">@plan.Name (@plan.Storage)</option>
+                        }
+                    </select>
+                    <span class="field-hint">What people who sign up with it get.</span>
+                </label>
+                <label class="field">
+                    Source
+                    <input class="input" name="source" required maxlength="200" value="@Value("source", null)" placeholder="spring campaign">
+                    <span class="field-hint">Where the code came from.</span>
+                </label>
+                <label class="field">
+                    Owner
+                    <input class="input" name="owner" value="@Value("owner", null)" autocapitalize="none" spellcheck="false" placeholder="optional">
+                    <span class="field-hint">The identity it belongs to, if any.</span>
+                </label>
+            </div>
+            <div class="mt-5"><button type="submit" class="btn">Make the code</button></div>
+        </form>
+
+        <section class="panel mt-6">
+            <form method="get" action="@($"{AdminPages.Root}/codes")" class="mb-4 flex flex-wrap items-end gap-3">
+                <label class="field grow sm:grow-0">
+                    Owner
+                    <input class="input sm:w-64" name="owner" value="@Owner" autocapitalize="none" spellcheck="false" placeholder="any">
+                </label>
+                <button type="submit" class="btn btn-secondary">Show</button>
+                @if (Owner != null)
+                {
+                    <a class="link text-sm" href="@($"{AdminPages.Root}/codes")">Clear</a>
+                }
+            </form>
+
+            @if (Codes.Count == 0)
+            {
+                <p class="text-sm text-muted">No codes@(Owner != null ? " for that owner" : " yet").</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead><tr><th>Code</th><th>Plan</th><th>Left</th><th>Owner</th><th>Source</th><th></th></tr></thead>
+                        <tbody class="divide-y divide-line">
+                            @foreach (var item in Codes)
+                            {
+                                <tr>
+                                    <td class="font-mono whitespace-nowrap"><a class="link" href="@AdminPages.CodeUrl(item.Code)">@item.Code</a></td>
+                                    <td>@(item.PlanId ?? "-")</td>
+                                    <td class="whitespace-nowrap tabular-nums">@item.UsesLeft <span class="text-muted">of @item.MaxUses</span></td>
+                                    <td class="text-xs">@item.Owner</td>
+                                    <td class="max-w-xs text-xs break-words text-muted">@item.Source</td>
+                                    <td>
+                                        @if (item.Disabled)
+                                        {
+                                            <StatusTag Text="disabled" Tone="bad" />
+                                        }
+                                        else if (item.UsesLeft == 0)
+                                        {
+                                            <StatusTag Text="used up" Tone="plain" />
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </ChildContent>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter] public List<InvitationCode> Codes { get; set; } = [];
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+
+    /// <summary>The filter: only this owner's codes</summary>
+    [Parameter] public string? Owner { get; set; }
+
+    /// <summary>A form that was refused, shown as it was sent</summary>
+    [Parameter] public IFormCollection? Form { get; set; }
+
+    private string Value(string name, string? fallback) => AdminForm.Value(Form, name, fallback);
+}

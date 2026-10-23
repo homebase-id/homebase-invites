@@ -64,13 +64,23 @@ public class UpgradeSession(IDataProtectionProvider dataProtection)
 public static class SiteAssets
 {
     private const string StylesheetPath = "/assets/site.css";
+    private const string AdminStylesheetPath = "/assets/admin.css";
 
     public static string Stylesheet { get; private set; } = StylesheetPath;
 
+    /// <summary>The admin pages' stylesheet (Tailwind, built by build-admin-css.sh)</summary>
+    public static string AdminStylesheet { get; private set; } = AdminStylesheetPath;
+
     public static void Load(IWebHostEnvironment environment)
     {
-        using var css = environment.WebRootFileProvider.GetFileInfo(StylesheetPath.TrimStart('/')).CreateReadStream();
-        Stylesheet = $"{StylesheetPath}?v={Convert.ToHexStringLower(SHA256.HashData(css))[..12]}";
+        Stylesheet = Versioned(environment, StylesheetPath);
+        AdminStylesheet = Versioned(environment, AdminStylesheetPath);
+    }
+
+    private static string Versioned(IWebHostEnvironment environment, string path)
+    {
+        using var css = environment.WebRootFileProvider.GetFileInfo(path.TrimStart('/')).CreateReadStream();
+        return $"{path}?v={Convert.ToHexStringLower(SHA256.HashData(css))[..12]}";
     }
 }
 
@@ -87,6 +97,12 @@ public static class UpgradePage
 
     // The plan chosen before signing in, kept across the trip to the identity and back
     private const string NextPlanCookie = "raven_next_plan";
+
+    /// <summary>
+    /// The value of next (on /sign-in and here) that goes on to the admin pages after signing in, kept across the
+    /// trip like a plan, in place of one
+    /// </summary>
+    public const string NextAdmin = "admin";
 
     /// <summary>
     /// Where "Back to your Homebase" goes once the plan is changed. The one place to change it.
@@ -113,7 +129,7 @@ public static class UpgradePage
 
         // Step 1, choose. id and host are hints anyone can write into a link: id only says whom to sign in, host is
         // used only if it is a host this service knows. plan, from the landing page, goes straight to confirming it
-        page.MapGet("", async (HttpContext context, string? id, string? host, string? plan, UpgradeOptions options,
+        page.MapGet("", async (HttpContext context, string? id, string? host, string? plan, string? next, UpgradeOptions options,
             UpgradeSession session, YouAuthLogin login, PlanService plans, PlanStore planStore, PlanHosts hosts) =>
         {
             if (!options.Enabled)
@@ -139,9 +155,14 @@ public static class UpgradePage
                 hint = null;
             }
 
+            var toAdmin = next == NextAdmin;
             var signedIn = session.Read(context);
             if (signedIn != null && (requested == null || requested == signedIn.Identity))
             {
+                if (toAdmin)
+                {
+                    return Results.Redirect(AdminPages.Root);
+                }
                 if (chosen != null)
                 {
                     return Results.Redirect(ConfirmUrl(chosen.Id));
@@ -165,7 +186,11 @@ public static class UpgradePage
                 return Results.Redirect(chosen == null ? SitePages.SignIn : SitePages.SignInFor(chosen.Id));
             }
 
-            if (chosen != null)
+            if (toAdmin)
+            {
+                context.Response.Cookies.Append(NextPlanCookie, NextAdmin, NextPlanCookieOptions());
+            }
+            else if (chosen != null)
             {
                 context.Response.Cookies.Append(NextPlanCookie, chosen.Id, NextPlanCookieOptions());
             }
@@ -196,7 +221,7 @@ public static class UpgradePage
                 await profiles.NameAsync(result.Identity)));
             var next = context.Request.Cookies[NextPlanCookie];
             context.Response.Cookies.Delete(NextPlanCookie, NextPlanCookieOptions());
-            return Results.Redirect(PlanIds.IsValid(next) ? ConfirmUrl(next!) : Root);
+            return Results.Redirect(next == NextAdmin ? AdminPages.Root : PlanIds.IsValid(next) ? ConfirmUrl(next!) : Root);
         });
 
         // Step 2, confirm
