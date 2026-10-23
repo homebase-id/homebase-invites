@@ -430,7 +430,10 @@ public static class UpgradePage
             session.Write(context, signedIn);
         }
 
-        return new Located(signedIn, located.Identity, null);
+        // Storage add-ons stay whatever plan they choose: plans are compared with the rest of their quota
+        var extra = (await context.RequestServices.GetRequiredService<AddOnStore>().ListAsync(signedIn.Identity))
+            .Where(a => a.IsActive && a.Kind == AddOnKind.Storage).Sum(a => a.Amount);
+        return new Located(signedIn, located.Identity is { } now ? now with { ExtraBytes = extra } : null, null);
     }
 
     // The plan, if it is one for sale; null otherwise
@@ -503,11 +506,11 @@ public record PlanFit(string? Note, bool CanChoose, bool IsMore = false)
         {
             return new PlanFit(null, true);
         }
-        if (now.UsedBytes is { } used && used >= plan.QuotaBytes)
+        if (now.UsedBytes is { } used && used >= plan.QuotaBytes + now.ExtraBytes)
         {
             return new PlanFit($"You store {StorageSize.Format(used)}", false);
         }
-        return now.QuotaBytes switch
+        return now.PlanQuotaBytes switch
         {
             null => new PlanFit(null, true),
             var quota when plan.QuotaBytes > quota =>
@@ -527,7 +530,7 @@ public static class PlanRecommendation
 {
     public static Plan? For(IEnumerable<Plan> plans, IdentityOnHost? now)
     {
-        if (now?.QuotaBytes is { } quota)
+        if (now?.PlanQuotaBytes is { } quota)
         {
             return plans
                 .Where(p => p.QuotaBytes > quota && !UpgradePage.SamePlan(p.Id, now.PlanId) && PlanFit.Of(p, now).CanChoose)

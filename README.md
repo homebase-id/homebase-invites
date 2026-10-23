@@ -58,7 +58,7 @@ The container listens on 8080 and keeps its database in `/data`: mount a volume 
 | Call | Key | Answer |
 |---|---|---|
 | `POST /validate {code}` | signup | `{valid}`: exists and has a use left |
-| `POST /use {code}` | signup | `{used, code}`: takes a use, atomically, and returns the code with what its plan gives now, `code.quotaBytes` and `code.publicWebPresence`, which the host stores on the new identity. Both are `null` for a code whose plan is not here (made before plans were), and the host uses its defaults; the service logs a warning |
+| `POST /use {code, identity?}` | signup | `{used, code}`: takes a use, atomically, and returns the code with what its plan gives now, `code.quotaBytes` and `code.publicWebPresence`, which the host stores on the new identity. Both are `null` for a code whose plan is not here (made before plans were), and the host uses its defaults; the service logs a warning. A host that says who is signing up (`identity`) starts their [subscription](#subscriptions) here: a free one of the code's plan, with no end, set on the host by the grant worker once the identity is there. odin-core does not send it yet |
 | `POST /undo-use {code}` | signup | 204: gives the latest use back |
 | `POST / {owner?, maxUses, source, planId, enablePublicWebPresence?}` | create | the new code |
 | `GET /?owner=<odinId>` | create | the codes, all of them without `owner` |
@@ -167,6 +167,32 @@ plan. The starting set, today's plans:
 
 A code whose plan is not one of the plans still works, with the host's defaults; give it a plan with
 `./raven.sh edit <code> --plan <plan id>`.
+
+## Subscriptions
+
+Each identity's **subscription** is its latest [grant](#plan-grants); the grants before it are its history. One per
+identity: a new grant (a code signup, a purchase, an admin changing its plan, or an expiry) replaces it.
+
+| How | Paid | Until |
+|---|---|---|
+| `code`: signed up with an invitation code (when the host says who, on `/use`) | free | no end |
+| `admin`: an admin changed its plan | free | no end |
+| `purchase`: bought on the upgrade page | the term's price | bought + the term's months (`endsAt`) |
+| `expiry`: the service, moving a paid one whose term and grace ran out back to the free plan | free | no end |
+
+- **Running out.** A paid subscription keeps its plan for **14 days' grace** after `endsAt` (`PlanService.Grace`).
+  Then, hourly (`RavenHosting:ExpiryIntervalMinutes`, 60), the service grants the `free` plan as an `expiry` grant,
+  noting why. Nothing is deleted: an identity storing more than the free plan allows is over quota, and its host
+  refuses new files until it upgrades. Admins can **extend** a paid one by months (from when it runs out, or from
+  now if that passed). Purchases made before `endsAt` existed get theirs from when they were bought.
+- **Add-ons** (`plan_add_ons`) are on top of the plan, whatever plan the identity is on, given by admins: more
+  storage, a public home page on or off (off is a safety tool), and a public email address and more email aliases,
+  which are only recorded until email is offered. Each can end on a date (removed hourly once it passed). The host
+  is given the plan's quota plus every storage add-on, and the latest public home page add-on in place of the plan's
+  (`Entitlement`); a change is set on the host straight away (`PlanService.ReapplyAsync`), and the daily reconcile
+  compares the host with plan plus add-ons. The upgrade page compares plans without storage add-ons, which stay.
+- **History:** every grant keeps `note` (why), `madeBy` (the admin, on the admin pages), and `reappliedAt` (when it
+  was last set on the host again: an add-on changed, or the host drifted); add-ons keep who added and removed them.
 
 ## Plan grants
 
@@ -310,10 +336,19 @@ Security:
 
 ## Admin pages
 
-`/admin` on the site does everything `raven.sh` does with the create key, for people rather than a shared key:
-plans and their prices, grants (give a plan, retry), invitation codes (make, change, disable, take or give back a
-use as a signup would) and their stats, who may buy, and content reports. The overview shows how each stands and
-the grants that need a look.
+`/admin` on the site does everything `raven.sh` does with the create key, for people rather than a shared key, in
+three groups:
+
+- **Subscriptions:** every identity's [subscription](#subscriptions), filterable (paid, free, expiring, in grace,
+  host not in sync, with add-ons); each one's page with its plan, until when, what it gets with its add-ons, its host,
+  **Extend**, add-ons, changing its plan, and its history. **Plans** and their prices.
+- **Marketing:** invitation codes (make, change, disable, take or give back a use as a signup would, copy the code
+  or its sign-up link); **Channels**, the code stats by source; **Renewals**, paid subscriptions running out in 7, 30
+  or 90 days or in their grace, and those moved back to free, with a CSV export.
+- **Safety:** **Abuse reports**, filed on the site's `/report` page ("Report abuse").
+
+The overview shows how each group stands and the subscriptions that need a look. **Checkout** (who may buy) is a
+beta switch, not a tab: while it is closed, a strip under the menu says so and links to it.
 
 - **Who:** admins sign in with their own Homebase identity, the same YouAuth sign-in as the upgrade page (one hour).
   Who is an admin is a list in the database, managed with the create key: `raven.sh admins add <identity>`, `admins

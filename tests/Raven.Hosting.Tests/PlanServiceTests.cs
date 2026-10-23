@@ -35,7 +35,7 @@ public class PlanServiceTests
         }
         _hosts = new FakeIdentityHosts();
         _time = new ManualTime();
-        _plans = new PlanService(_store, _planStore, new PlanHosts([One, Two, Three], FakeIdentityHosts.PlanKey),
+        _plans = new PlanService(_store, _planStore, new AddOnStore(_path), new PlanHosts([One, Two, Three], FakeIdentityHosts.PlanKey),
             new SingleHandlerFactory(_hosts), _time, NullLogger<PlanService>.Instance);
     }
 

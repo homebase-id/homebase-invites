@@ -12,7 +12,59 @@ namespace Raven.Hosting;
 /// <param name="Name">The name on their public profile card; null when it has none</param>
 /// <param name="Done">What the last change did, to say so at the top; null when nothing was just done</param>
 /// <param name="Error">Why the last change was refused; null when it was not</param>
-public record AdminContext(string Identity, string? Name, AntiforgeryTokenSet Antiforgery, string? Done, string? Error);
+/// <param name="Checkout">Whether anyone may buy, and how many testers may while not: the beta badge says so</param>
+public record AdminContext(string Identity, string? Name, AntiforgeryTokenSet Antiforgery, string? Done, string? Error,
+    PurchaseAccess Checkout);
+
+/// <summary>
+/// One identity's subscription as the admin pages show it: its latest grant, what it gives with its add-ons, and
+/// whether it is running out
+/// </summary>
+/// <param name="PlanName">The plan's name; its Id when it is no longer a plan</param>
+/// <param name="AddOns">Its active add-ons</param>
+/// <param name="Now">When it was looked at (unix ms)</param>
+public record SubscriptionRow(PlanGrant Grant, string PlanName, Entitlement Entitlement, List<AddOn> AddOns, long Now)
+{
+    /// <summary>What the list filters by</summary>
+    public static readonly string[] States = ["active", "expiring", "grace", "paid", "free", "out-of-sync", "add-ons"];
+
+    /// <summary>A paid subscription runs out this many days before it shows as expiring</summary>
+    public const int ExpiringDays = 30;
+
+    public bool IsPaid => Grant.EndsAt != null;
+
+    /// <summary>Whole days until it runs out (0 on the day, less once it has); null when it does not</summary>
+    public int? DaysLeft => Grant.EndsAt is { } ends ? (int)Math.Ceiling((ends - Now) / 86_400_000d) : null;
+
+    /// <summary>active, expiring (within <see cref="ExpiringDays"/>) or grace (ran out, not yet moved to free)</summary>
+    public string State => Grant.EndsAt is { } ends && ends < Now ? "grace" : DaysLeft <= ExpiringDays ? "expiring" : "active";
+
+    /// <summary>When the grace ends and it goes back to the free plan; null when it is not in its grace</summary>
+    public long? GraceEndsAt => State == "grace" ? Grant.EndsAt + (long)PlanService.Grace.TotalMilliseconds : null;
+
+    /// <summary>How it came about, as people read it</summary>
+    public string How => Grant.Source switch
+    {
+        PlanGrantSource.Purchase => Grant.PriceAmountCents is { } cents && Grant.PriceMonths is { } months
+            ? $"Paid {new PlanPrice(months, cents).Text}"
+            : "Paid",
+        PlanGrantSource.Code => "Free, from a code",
+        PlanGrantSource.Expiry => "Free, after a paid plan ran out",
+        _ => "Free, from an admin",
+    };
+
+    public bool Is(string state) => state switch
+    {
+        "active" => State == "active",
+        "expiring" => State == "expiring",
+        "grace" => State == "grace",
+        "paid" => IsPaid,
+        "free" => !IsPaid,
+        "out-of-sync" => Grant.Status != PlanGrantStatus.Applied,
+        "add-ons" => AddOns.Count > 0,
+        _ => true,
+    };
+}
 
 /// <summary>
 /// The admin pages (/admin): everything raven.sh does with the create key, for admins signed in with their Homebase
@@ -35,26 +87,30 @@ public static class AdminPages
         // Overview
         //
 
-        admin.MapGet("", async (HttpContext context, PlanStore plans, PlanGrantStore grants, InvitationCodeStore codes,
-            PurchaseAccessStore purchases, ReportStore reports, AdminStore admins, TimeProvider time) =>
-            Show<AdminHome>(context, new
+        admin.MapGet("", async (HttpContext context, PlanStore plans, PlanGrantStore grants, AddOnStore addOns,
+            InvitationCodeStore codes, ReportStore reports, AdminStore admins, TimeProvider time) =>
+        {
+            var rows = await SubscriptionRowsAsync(grants, addOns, plans, time);
+            return await Show<AdminHome>(context, new
             {
                 Plans = await plans.ListAsync(),
-                Grants = await grants.ListAsync(null, null),
+                Subscriptions = rows,
+                Counts = SubscriptionRow.States.ToDictionary(s => s, s => rows.Count(r => r.Is(s))),
                 Stats = await codes.StatsAsync(null),
-                Access = await purchases.GetAsync(),
+                WeekStats = await codes.StatsAsync(DaysAgo(time, 7)),
                 RecentReports = (await reports.ListAsync(DaysAgo(time, 7))).Count,
                 Admins = await admins.ListAsync(),
-            }));
+            });
+        });
 
         //
         // Plans
         //
 
         admin.MapGet("/plans", async (HttpContext context, PlanStore plans) =>
-            Show<AdminPlans>(context, new { Plans = await plans.ListAsync() }));
+            await Show<AdminPlans>(context, new { Plans = await plans.ListAsync() }));
 
-        admin.MapGet("/plans/new", (HttpContext context) => Show<AdminPlanForm>(context, new { }));
+        admin.MapGet("/plans/new", async (HttpContext context) => await Show<AdminPlanForm>(context, new { }));
 
         admin.MapPost("/plans/new", async (HttpContext context, IFormCollection form, PlanStore plans) =>
         {
@@ -78,20 +134,20 @@ public static class AdminPages
             }
             catch (Exception e) when (IsRefusal(e))
             {
-                return Show<AdminPlanForm>(context, new { Form = form }, e.Message, StatusCodes.Status400BadRequest);
+                return await Show<AdminPlanForm>(context, new { Form = form }, e.Message, StatusCodes.Status400BadRequest);
             }
         });
 
         admin.MapGet("/plans/{id}", async (HttpContext context, string id, PlanStore plans, InvitationCodeStore codes,
             PlanGrantStore grants) =>
             await plans.GetAsync(id) is { } plan
-                ? Show<AdminPlanForm>(context, new
+                ? await Show<AdminPlanForm>(context, new
                 {
                     Plan = plan,
                     CodesUsing = await codes.CountWithPlanAsync(plan.Id),
                     GrantsUsing = await grants.CountWithPlanAsync(plan.Id),
                 })
-                : NotFound(context, "There is no such plan."));
+                : await NotFound(context, "There is no such plan."));
 
         admin.MapPost("/plans/{id}", async (HttpContext context, string id, IFormCollection form, PlanStore plans,
             InvitationCodeStore codes, PlanGrantStore grants) =>
@@ -105,7 +161,7 @@ public static class AdminPages
                     Number(form["emailAliases"], "Email aliases") ?? 0, Checked(form, "recommended")));
                 if (plan == null)
                 {
-                    return NotFound(context, "There is no such plan.");
+                    return await NotFound(context, "There is no such plan.");
                 }
                 Log(context, "changed plan {PlanId}", plan.Id);
                 return Back(PlanUrl(plan.Id), done: "Saved.");
@@ -113,14 +169,14 @@ public static class AdminPages
             catch (Exception e) when (IsRefusal(e))
             {
                 return await plans.GetAsync(id) is { } plan
-                    ? Show<AdminPlanForm>(context, new
+                    ? await Show<AdminPlanForm>(context, new
                     {
                         Plan = plan,
                         Form = form,
                         CodesUsing = await codes.CountWithPlanAsync(plan.Id),
                         GrantsUsing = await grants.CountWithPlanAsync(plan.Id),
                     }, e.Message, StatusCodes.Status400BadRequest)
-                    : NotFound(context, "There is no such plan.");
+                    : await NotFound(context, "There is no such plan.");
             }
         });
 
@@ -132,7 +188,7 @@ public static class AdminPages
                 var plan = await plans.SetPriceAsync(id, months, Cents(form["dollars"]));
                 if (plan == null)
                 {
-                    return NotFound(context, "There is no such plan.");
+                    return await NotFound(context, "There is no such plan.");
                 }
                 Log(context, "set plan {PlanId}'s price for {Months} months", plan.Id, months);
                 return Back(PlanUrl(plan.Id), done: $"{plan.PriceFor(months)!.Text} set.");
@@ -151,7 +207,7 @@ public static class AdminPages
                 var (plan, found) = await plans.RemovePriceAsync(id, months);
                 if (plan == null)
                 {
-                    return NotFound(context, "There is no such plan.");
+                    return await NotFound(context, "There is no such plan.");
                 }
                 if (!found)
                 {
@@ -172,7 +228,7 @@ public static class AdminPages
             var (found, conflict) = await DeletePlanAsync(plans, codes, grants, id);
             if (!found)
             {
-                return NotFound(context, "There is no such plan.");
+                return await NotFound(context, "There is no such plan.");
             }
             if (conflict != null)
             {
@@ -183,51 +239,51 @@ public static class AdminPages
         });
 
         //
-        // Grants
+        // Subscriptions: each identity's latest grant, its add-ons, and the grants before it
         //
 
-        admin.MapGet("/grants", async (HttpContext context, string? identity, string? status, PlanGrantStore grants,
-            PlanStore plans, PlanHosts hosts) =>
+        admin.MapGet("/grants", (string? identity) =>
+            Results.Redirect(DomainNames.Normalize(identity) is { } found ? SubscriptionUrl(found) : $"{Root}/subscriptions"));
+
+        admin.MapGet("/subscriptions", async (HttpContext context, string? q, string? state, PlanGrantStore grants,
+            AddOnStore addOns, PlanStore plans, PlanHosts hosts, TimeProvider time) =>
         {
-            identity = string.IsNullOrWhiteSpace(identity) ? null : identity.Trim();
-            status = string.IsNullOrWhiteSpace(status) ? null : status;
-            string? problem = null;
-            List<PlanGrant> list;
-            try
+            q = string.IsNullOrWhiteSpace(q) ? null : q.Trim().ToLowerInvariant();
+            state = SubscriptionRow.States.Contains(state) ? state : null;
+            var rows = await SubscriptionRowsAsync(grants, addOns, plans, time);
+            return await Show<AdminSubscriptions>(context, new
             {
-                list = await grants.ListAsync(identity, status);
-            }
-            catch (InvalidInvitationCodeRequestException e)
-            {
-                list = [];
-                problem = e.Message;
-            }
-            return Show<AdminGrants>(context, new
-            {
-                Grants = list,
+                Rows = rows.Where(r => (q == null || r.Grant.Identity.Contains(q)) && (state == null || r.Is(state))).ToList(),
+                Counts = SubscriptionRow.States.ToDictionary(s => s, s => rows.Count(r => r.Is(s))),
                 Plans = await plans.ListAsync(),
                 Hosts = hosts.Hosts,
-                Identity = identity,
-                Status = status,
-            }, problem);
+                Query = q,
+                State = state,
+            });
         });
 
-        admin.MapPost("/grants", async (HttpContext context, IFormCollection form, PlanService service,
-            PlanGrantStore grants, PlanStore plans, PlanHosts hosts) =>
+        // Change an identity's plan: a new subscription, with the one it had going to its history
+        admin.MapPost("/subscriptions", async (HttpContext context, IFormCollection form, PlanService service,
+            PlanGrantStore grants, AddOnStore addOns, PlanStore plans, PlanHosts hosts, TimeProvider time) =>
         {
+            var admin = Who(context);
             try
             {
                 var grant = await service.GrantAsync(Text(form["identity"]), Text(form["planId"]), PlanGrantSource.Admin,
-                    Text(form["reference"]), Text(form["host"]));
-                Log(context, "granted plan {PlanId} to {Identity} (grant {GrantId})", grant.PlanId, grant.Identity, grant.Id);
-                return Back($"{Root}/grants?identity={Uri.EscapeDataString(grant.Identity)}",
-                    done: $"Grant {grant.Id}: {grant.PlanId} for {grant.Identity}, {grant.Status}.");
+                    Text(form["reference"]), Text(form["host"]), note: Text(form["note"]), madeBy: admin);
+                Log(context, "put {Identity} on plan {PlanId} (grant {GrantId})", grant.Identity, grant.PlanId, grant.Id);
+                return Back(SubscriptionUrl(grant.Identity),
+                    done: grant.Status == PlanGrantStatus.Applied
+                        ? $"{grant.Identity} is on {grant.PlanId}, set on {grant.Host}."
+                        : $"{grant.Identity} is on {grant.PlanId}; the host does not have it yet ({grant.Status}).");
             }
             catch (Exception e) when (IsRefusal(e) || e is PlanGrantConflictException)
             {
-                return Show<AdminGrants>(context, new
+                var rows = await SubscriptionRowsAsync(grants, addOns, plans, time);
+                return await Show<AdminSubscriptions>(context, new
                 {
-                    Grants = await grants.ListAsync(null, null),
+                    Rows = rows,
+                    Counts = SubscriptionRow.States.ToDictionary(s => s, s => rows.Count(r => r.Is(s))),
                     Plans = await plans.ListAsync(),
                     Hosts = hosts.Hosts,
                     Form = form,
@@ -235,21 +291,136 @@ public static class AdminPages
             }
         });
 
-        admin.MapPost("/grants/{id:long}/retry", async (HttpContext context, long id, IFormCollection form,
-            PlanService service, PlanGrantStore grants) =>
+        admin.MapGet("/subscriptions/{identity}", async (HttpContext context, string identity, PlanGrantStore grants,
+            AddOnStore addOns, PlanStore plans, PlanHosts hosts, TimeProvider time) =>
         {
-            var back = Text(form["back"]) is { } b && b.StartsWith($"{Root}/") ? b : $"{Root}/grants";
-            var grant = await service.RetryAsync(id);
-            if (grant == null)
+            if (DomainNames.Normalize(identity) is not { } found)
             {
-                return await grants.GetAsync(id) is null
-                    ? NotFound(context, "There is no such grant.")
-                    : Back(back, error: $"Grant {id} is already applied.");
+                return await NotFound(context, "That is not an identity.");
             }
-            Log(context, "retried grant {GrantId}", id);
-            return grant.Status == PlanGrantStatus.Applied
-                ? Back(back, done: $"Grant {id} is applied on {grant.Host}.")
-                : Back(back, error: $"Grant {id} is {grant.Status}: {grant.LastError}");
+            return await Show<AdminSubscription>(context, await SubscriptionPageAsync(found, grants, addOns, plans, hosts, time));
+        });
+
+        admin.MapPost("/subscriptions/{identity}/extend", async (HttpContext context, string identity,
+            IFormCollection form, PlanGrantStore grants, TimeProvider time) =>
+        {
+            var found = DomainNames.Normalize(identity) ?? "";
+            try
+            {
+                var current = await grants.CurrentForAsync(found);
+                var months = Number(form["months"], "Months") ?? throw new InvalidPlanGrantRequestException("Give the months");
+                var extended = current == null ? null
+                    : await grants.ExtendAsync(current.Id, months, time.GetUtcNow().ToUnixTimeMilliseconds());
+                if (extended == null)
+                {
+                    return Back(SubscriptionUrl(found), error: "Only a paid subscription, which runs out, can be extended.");
+                }
+                Log(context, "extended {Identity}'s {PlanId} by {Months} months", found, extended.PlanId, months);
+                return Back(SubscriptionUrl(found),
+                    done: $"Extended by {BillingTerm.Name(months)}: now until {AdminForm.Day(extended.EndsAt)}.");
+            }
+            catch (InvalidInvitationCodeRequestException e)
+            {
+                return Back(SubscriptionUrl(found), error: e.Message);
+            }
+        });
+
+        admin.MapPost("/subscriptions/{identity}/add-ons", async (HttpContext context, string identity,
+            IFormCollection form, AddOnStore addOns, PlanService service, TimeProvider time) =>
+        {
+            var found = DomainNames.Normalize(identity) ?? "";
+            try
+            {
+                var kind = Text(form["kind"]) ?? "";
+                long amount = kind switch
+                {
+                    AddOnKind.Storage => Bytes(form["amount"], form["unit"]),
+                    AddOnKind.EmailAliases => Number(form["amount"], "Aliases") ?? 0,
+                    AddOnKind.PublicWebPresence => form["on"] == "true" ? 1 : 0,
+                    _ => 1,
+                };
+                var addOn = await addOns.AddAsync(found, kind, amount, Text(form["note"]), Day(form["endsOn"]), Who(context),
+                    time.GetUtcNow().ToUnixTimeMilliseconds());
+                Log(context, "gave {Identity} add-on {AddOnId}: {AddOn}", found, addOn.Id, addOn.Description);
+                if (AddOnKind.IsSentToHosts(kind))
+                {
+                    var current = await service.ReapplyAsync(found);
+                    return current is { Status: PlanGrantStatus.Applied }
+                        ? Back(SubscriptionUrl(found), done: $"{addOn.Description}, set on {current.Host}.")
+                        : Back(SubscriptionUrl(found), done: $"{addOn.Description} added; its host gets it with the plan.");
+                }
+                return Back(SubscriptionUrl(found), done: $"{addOn.Description} recorded; email is not offered yet.");
+            }
+            catch (InvalidInvitationCodeRequestException e)
+            {
+                return Back(SubscriptionUrl(found), error: e.Message);
+            }
+        });
+
+        admin.MapPost("/subscriptions/{identity}/add-ons/{id:long}/remove", async (HttpContext context, string identity,
+            long id, IFormCollection form, AddOnStore addOns, PlanService service, TimeProvider time) =>
+        {
+            var found = DomainNames.Normalize(identity) ?? "";
+            var removed = await addOns.RemoveAsync(found, id, Who(context), time.GetUtcNow().ToUnixTimeMilliseconds());
+            if (removed == null)
+            {
+                return Back(SubscriptionUrl(found), error: "That add-on is not active.");
+            }
+            Log(context, "took away {Identity}'s add-on {AddOnId}: {AddOn}", found, id, removed.Description);
+            if (AddOnKind.IsSentToHosts(removed.Kind))
+            {
+                await service.ReapplyAsync(found);
+            }
+            return Back(SubscriptionUrl(found), done: $"{removed.Description} taken away.");
+        });
+
+        // Try the subscription on its host again now: a pending or failed one, or an applied one set again
+        admin.MapPost("/subscriptions/{identity}/apply", async (HttpContext context, string identity,
+            IFormCollection form, PlanService service) =>
+        {
+            var found = DomainNames.Normalize(identity) ?? "";
+            var current = await service.ReapplyAsync(found);
+            if (current == null)
+            {
+                return Back(SubscriptionUrl(found), error: $"{found} has no subscription.");
+            }
+            Log(context, "set {Identity}'s subscription on its host again", found);
+            return current.Status == PlanGrantStatus.Applied
+                ? Back(SubscriptionUrl(found), done: $"Set on {current.Host}.")
+                : Back(SubscriptionUrl(found), error: $"Still {current.Status}: {current.LastError}");
+        });
+
+        //
+        // Renewals: paid subscriptions running out, in their grace, or moved back to free
+        //
+
+        admin.MapGet("/renewals", async (HttpContext context, string? within, PlanGrantStore grants, AddOnStore addOns,
+            PlanStore plans, TimeProvider time) =>
+        {
+            within = RenewalsWithin.Contains(within) ? within : "30";
+            return await Show<AdminRenewals>(context, new
+            {
+                Rows = await RenewalsAsync(within, grants, addOns, plans, time),
+                Dropped = await DroppedAsync(grants, time),
+                Within = within,
+            });
+        });
+
+        admin.MapGet("/renewals.csv", async (HttpContext context, string? within, PlanGrantStore grants,
+            AddOnStore addOns, PlanStore plans, TimeProvider time) =>
+        {
+            within = RenewalsWithin.Contains(within) ? within : "30";
+            var csv = new System.Text.StringBuilder("identity,plan,paid,term_months,bought,until,days_left,state\n");
+            foreach (var row in await RenewalsAsync(within, grants, addOns, plans, time))
+            {
+                var g = row.Grant;
+                csv.AppendLine(string.Join(",", Csv(g.Identity), Csv(g.PlanId),
+                    g.PriceAmountCents is { } cents ? AdminForm.Dollars(cents) : "",
+                    g.PriceMonths?.ToString(CultureInfo.InvariantCulture) ?? "", AdminForm.Day(g.CreatedAt),
+                    AdminForm.Day(g.EndsAt), row.DaysLeft?.ToString(CultureInfo.InvariantCulture) ?? "", row.State));
+            }
+            return Results.File(System.Text.Encoding.UTF8.GetBytes(csv.ToString()), "text/csv",
+                $"renewals-{within}-{time.GetUtcNow():yyyy-MM-dd}.csv");
         });
 
         //
@@ -272,7 +443,7 @@ public static class AdminPages
                 problem = e.Message;
             }
             list.Reverse();
-            return Show<AdminCodes>(context, new
+            return await Show<AdminCodes>(context, new
             {
                 Codes = list,
                 Plans = await plans.ListAsync(),
@@ -297,7 +468,7 @@ public static class AdminPages
             {
                 var list = await codes.ListAsync(null);
                 list.Reverse();
-                return Show<AdminCodes>(context, new
+                return await Show<AdminCodes>(context, new
                 {
                     Codes = list,
                     Plans = await plans.ListAsync(),
@@ -310,7 +481,7 @@ public static class AdminPages
         admin.MapGet("/codes/stats", async (HttpContext context, int? days, InvitationCodeStore codes, TimeProvider time) =>
         {
             days = days is > 0 ? days : null;
-            return Show<AdminStats>(context, new
+            return await Show<AdminStats>(context, new
             {
                 Stats = await codes.StatsAsync(days == null ? null : DaysAgo(time, days.Value)),
                 Days = days,
@@ -320,8 +491,8 @@ public static class AdminPages
         admin.MapGet("/codes/{code}", async (HttpContext context, string code, InvitationCodeStore codes, PlanStore plans,
             PlanHosts hosts) =>
             await codes.GetAsync(code) is { } found
-                ? Show<AdminCode>(context, new { Code = found, Plans = await plans.ListAsync(), SignupHosts = SignupHosts(hosts) })
-                : NotFound(context, "There is no such code."));
+                ? await Show<AdminCode>(context, new { Code = found, Plans = await plans.ListAsync(), SignupHosts = SignupHosts(hosts) })
+                : await NotFound(context, "There is no such code."));
 
         admin.MapPost("/codes/{code}", async (HttpContext context, string code, IFormCollection form,
             InvitationCodeStore codes, PlanStore plans, PlanHosts hosts) =>
@@ -336,7 +507,7 @@ public static class AdminPages
                     PlanId: plan.Id));
                 if (updated == null)
                 {
-                    return NotFound(context, "There is no such code.");
+                    return await NotFound(context, "There is no such code.");
                 }
                 Log(context, "changed code {Code}", updated.Code);
                 return Back(CodeUrl(updated.Code), done: "Saved.");
@@ -344,14 +515,14 @@ public static class AdminPages
             catch (Exception e) when (IsRefusal(e))
             {
                 return await codes.GetAsync(code) is { } found
-                    ? Show<AdminCode>(context, new
+                    ? await Show<AdminCode>(context, new
                     {
                         Code = found,
                         Plans = await plans.ListAsync(),
                         Form = form,
                         SignupHosts = SignupHosts(hosts),
                     }, e.Message, StatusCodes.Status400BadRequest)
-                    : NotFound(context, "There is no such code.");
+                    : await NotFound(context, "There is no such code.");
             }
         });
 
@@ -361,7 +532,7 @@ public static class AdminPages
             var updated = await codes.UpdateAsync(code, new InvitationCodeChange(Disabled: action == "disable"));
             if (updated == null)
             {
-                return NotFound(context, "There is no such code.");
+                return await NotFound(context, "There is no such code.");
             }
             Log(context, action + "d code {Code}", updated.Code);
             return Back(CodeUrl(updated.Code), done: updated.Disabled ? "Disabled." : "Enabled.");
@@ -373,7 +544,7 @@ public static class AdminPages
         {
             if (await codes.GetAsync(code) is not { } found)
             {
-                return NotFound(context, "There is no such code.");
+                return await NotFound(context, "There is no such code.");
             }
             var used = await codes.TryUseAsync(found.Code);
             if (used == null)
@@ -389,7 +560,7 @@ public static class AdminPages
         {
             if (await codes.GetAsync(code) is not { } found)
             {
-                return NotFound(context, "There is no such code.");
+                return await NotFound(context, "There is no such code.");
             }
             await codes.UndoUseAsync(found.Code);
             var after = await codes.GetAsync(found.Code);
@@ -400,22 +571,24 @@ public static class AdminPages
         });
 
         //
-        // Who may buy
+        // Checkout: who may buy, while there is no real payment (a beta switch)
         //
 
-        admin.MapGet("/purchases", async (HttpContext context, PurchaseAccessStore purchases) =>
-            Show<AdminPurchases>(context, new { Access = await purchases.GetAsync() }));
+        admin.MapGet("/purchases", () => Results.Redirect($"{Root}/checkout"));
 
-        admin.MapPost("/purchases/open", async (HttpContext context, IFormCollection form, PurchaseAccessStore purchases) =>
+        admin.MapGet("/checkout", async (HttpContext context, PurchaseAccessStore purchases) =>
+            await Show<AdminCheckout>(context, new { Access = await purchases.GetAsync() }));
+
+        admin.MapPost("/checkout/open", async (HttpContext context, IFormCollection form, PurchaseAccessStore purchases) =>
         {
             var open = form["open"] == "true";
             await purchases.SetOpenAsync(open);
-            Log(context, open ? "opened purchases" : "closed purchases");
-            return Back($"{Root}/purchases",
-                done: open ? "Purchases are open: anyone signed in can buy." : "Purchases are closed: only testers can buy.");
+            Log(context, open ? "opened checkout" : "closed checkout");
+            return Back($"{Root}/checkout",
+                done: open ? "Checkout is open: anyone signed in can buy." : "Checkout is closed: only testers can buy.");
         });
 
-        admin.MapPost("/purchases/testers", async (HttpContext context, IFormCollection form,
+        admin.MapPost("/checkout/testers", async (HttpContext context, IFormCollection form,
             PurchaseAccessStore purchases, TimeProvider time) =>
         {
             try
@@ -423,33 +596,33 @@ public static class AdminPages
                 var identity = DomainNames.Normalize(form["identity"]);
                 await purchases.AddTesterAsync(form["identity"], time.GetUtcNow().ToUnixTimeMilliseconds());
                 Log(context, "added tester {Identity}", identity);
-                return Back($"{Root}/purchases", done: $"{identity} can buy.");
+                return Back($"{Root}/checkout", done: $"{identity} can buy.");
             }
             catch (InvalidInvitationCodeRequestException e)
             {
-                return Back($"{Root}/purchases", error: e.Message);
+                return Back($"{Root}/checkout", error: e.Message);
             }
         });
 
-        admin.MapPost("/purchases/testers/{identity}/remove", async (HttpContext context, string identity,
+        admin.MapPost("/checkout/testers/{identity}/remove", async (HttpContext context, string identity,
             IFormCollection form, PurchaseAccessStore purchases) =>
         {
             if (await purchases.RemoveTesterAsync(identity) == null)
             {
-                return Back($"{Root}/purchases", error: $"{identity} is not a tester.");
+                return Back($"{Root}/checkout", error: $"{identity} is not a tester.");
             }
             Log(context, "removed tester {Identity}", identity);
-            return Back($"{Root}/purchases", done: $"{identity} is no longer a tester.");
+            return Back($"{Root}/checkout", done: $"{identity} is no longer a tester.");
         });
 
         //
-        // Content reports
+        // Abuse reports
         //
 
         admin.MapGet("/reports", async (HttpContext context, int? days, ReportStore reports, TimeProvider time) =>
         {
             days = days is > 0 ? days : null;
-            return Show<AdminReports>(context, new
+            return await Show<AdminReports>(context, new
             {
                 Reports = await reports.ListAsync(days == null ? null : DaysAgo(time, days.Value)),
                 Days = days,
@@ -495,6 +668,63 @@ public static class AdminPages
     public static string SignupUrl(string host, string code) =>
         $"https://{host}/?invitation-code={Uri.EscapeDataString(code)}";
 
+    public static string SubscriptionUrl(string identity) => $"{Root}/subscriptions/{Uri.EscapeDataString(identity)}";
+
+    /// <summary>The renewals list's windows: running out within this many days, or in their grace</summary>
+    public static readonly string[] RenewalsWithin = ["7", "30", "90", "grace"];
+
+    private static async Task<List<SubscriptionRow>> SubscriptionRowsAsync(PlanGrantStore grants, AddOnStore addOns,
+        PlanStore plans, TimeProvider time)
+    {
+        var names = (await plans.ListAsync()).ToDictionary(p => p.Id, p => p.Name, StringComparer.OrdinalIgnoreCase);
+        var active = await addOns.ActiveByIdentityAsync();
+        var now = time.GetUtcNow().ToUnixTimeMilliseconds();
+        return (await grants.CurrentAsync()).Select(g =>
+        {
+            var own = active.GetValueOrDefault(g.Identity) ?? [];
+            return new SubscriptionRow(g, names.GetValueOrDefault(g.PlanId) ?? g.PlanId, Entitlement.Of(g, own), own, now);
+        }).ToList();
+    }
+
+    private static async Task<object> SubscriptionPageAsync(string identity, PlanGrantStore grants, AddOnStore addOns,
+        PlanStore plans, PlanHosts hosts, TimeProvider time)
+    {
+        var history = await grants.ListAsync(identity, null);
+        var all = await addOns.ListAsync(identity);
+        var active = all.Where(a => a.IsActive).ToList();
+        var planList = await plans.ListAsync();
+        var current = history.FirstOrDefault();
+        return new
+        {
+            Identity = identity,
+            Row = current == null
+                ? null
+                : new SubscriptionRow(current, planList.FirstOrDefault(p => UpgradePage.SamePlan(p.Id, current.PlanId))?.Name
+                                               ?? current.PlanId, Entitlement.Of(current, active), active,
+                    time.GetUtcNow().ToUnixTimeMilliseconds()),
+            History = history,
+            AddOns = all,
+            Plans = planList,
+            Hosts = hosts.Hosts,
+        };
+    }
+
+    private static async Task<List<SubscriptionRow>> RenewalsAsync(string within, PlanGrantStore grants,
+        AddOnStore addOns, PlanStore plans, TimeProvider time) =>
+        (await SubscriptionRowsAsync(grants, addOns, plans, time))
+        .Where(r => r.IsPaid && (within == "grace" ? r.State == "grace" : r.State != "grace" && r.DaysLeft <= int.Parse(within)))
+        .OrderBy(r => r.Grant.EndsAt)
+        .ToList();
+
+    // Identities moved back to the free plan in the last 90 days, newest first
+    private static async Task<List<PlanGrant>> DroppedAsync(PlanGrantStore grants, TimeProvider time)
+    {
+        var since = DaysAgo(time, 90);
+        return (await grants.ListAsync(null, null))
+            .Where(g => g.Source == PlanGrantSource.Expiry && g.CreatedAt >= since)
+            .ToList();
+    }
+
     public static string PlanUrl(string id) => $"{Root}/plans/{Uri.EscapeDataString(id)}";
 
     public static string CodeUrl(string code) => $"{Root}/codes/{Uri.EscapeDataString(code)}";
@@ -533,7 +763,7 @@ public static class AdminPages
         return await next(invocation);
     }
 
-    private static IResult Show<TPage>(HttpContext context, object parameters, string? error = null,
+    private static async Task<IResult> Show<TPage>(HttpContext context, object parameters, string? error = null,
         int status = StatusCodes.Status200OK) where TPage : Microsoft.AspNetCore.Components.IComponent
     {
         var signedIn = (UpgradeSession.Data)context.Items[AdminItem]!;
@@ -541,7 +771,8 @@ public static class AdminPages
         var admin = new AdminContext(signedIn.Identity, signedIn.Name,
             context.RequestServices.GetRequiredService<IAntiforgery>().GetAndStoreTokens(context),
             context.Request.Method == HttpMethods.Get ? Text(query["done"]) : null,
-            error ?? (context.Request.Method == HttpMethods.Get ? Text(query["error"]) : null));
+            error ?? (context.Request.Method == HttpMethods.Get ? Text(query["error"]) : null),
+            await context.RequestServices.GetRequiredService<PurchaseAccessStore>().GetAsync());
 
         var values = new Dictionary<string, object?> { ["Admin"] = admin };
         foreach (var property in parameters.GetType().GetProperties())
@@ -551,7 +782,7 @@ public static class AdminPages
         return UpgradePage.Show<TPage>(values, status);
     }
 
-    private static IResult NotFound(HttpContext context, string message) =>
+    private static Task<IResult> NotFound(HttpContext context, string message) =>
         Show<AdminMessage>(context, new { Message = message }, status: StatusCodes.Status404NotFound);
 
     // Back to a page, saying what was done or why not; the page shows it once
@@ -562,6 +793,20 @@ public static class AdminPages
             : error != null ? Results.Redirect($"{path}{separator}error={Uri.EscapeDataString(error)}")
             : Results.Redirect(path);
     }
+
+    // The signed-in admin
+    private static string Who(HttpContext context) => ((UpgradeSession.Data)context.Items[AdminItem]!).Identity;
+
+    // A day as the date field sends it (2027-01-31), as unix ms at its start, UTC; null when none was given
+    private static long? Day(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null
+        : DateTimeOffset.TryParseExact(value.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal, out var day) ? day.ToUnixTimeMilliseconds()
+        : throw new InvalidAddOnRequestException($"'{value}' is not a date");
+
+    // A CSV field, quoted when it has to be
+    private static string Csv(string value) =>
+        value.IndexOfAny([',', '"', '\n']) >= 0 ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
 
     private static void Log(HttpContext context, string action, params object?[] args)
     {
@@ -660,6 +905,11 @@ public static class AdminForm
     /// </summary>
     public static readonly string[] SourceSuggestions =
         ["X", "Instagram", "Facebook", "LinkedIn", "TikTok", "YouTube", "Reddit", "Newsletter", "Event", "Referral", "Website"];
+
+    /// <summary>Unix ms as a day, UTC: 2027-10-23</summary>
+    public static string Day(long? ms) => ms is { } value
+        ? DateTimeOffset.FromUnixTimeMilliseconds(value).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+        : "";
 
     /// <summary>Cents as the price form shows them: 5, 4.99</summary>
     public static string Dollars(long cents) =>

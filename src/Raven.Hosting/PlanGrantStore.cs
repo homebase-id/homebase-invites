@@ -20,6 +20,14 @@ namespace Raven.Hosting;
 /// refused the plan, which no retry by itself will change</param>
 /// <param name="Attempts">How many times the service tried to set it</param>
 /// <param name="NextAttemptAt">When a pending grant is tried again (unix ms)</param>
+/// <param name="EndsAt">For a purchase, when the term bought runs out (unix ms): bought at plus its months, later if
+/// an admin extended it; null for a grant that does not end (a code's, an admin's). After a grace period the identity
+/// goes back to the free plan (<see cref="PlanGrantWorker"/>)</param>
+/// <param name="ReappliedAt">When it was last set on the host again after it was applied: an add-on changed, or the
+/// host drifted; null until then</param>
+/// <param name="Note">Why it was made, as the admin or the service said: "support goodwill", "expired"</param>
+/// <param name="MadeBy">The admin who made it on the admin pages; null for the API, codes, purchases and the service</param>
+/// <remarks>Each identity's latest grant is its subscription; the ones before it are its history.</remarks>
 public record PlanGrant(
     long Id,
     string Identity,
@@ -38,7 +46,15 @@ public record PlanGrant(
     long? NextAttemptAt,
     long CreatedAt,
     long UpdatedAt,
-    long? AppliedAt);
+    long? AppliedAt,
+    long? EndsAt = null,
+    long? ReappliedAt = null,
+    string? Note = null,
+    string? MadeBy = null)
+{
+    /// <summary>When the host was last given it; null until it was</summary>
+    public long? LastAppliedAt => ReappliedAt ?? AppliedAt;
+}
 
 public static class PlanGrantStatus
 {
@@ -55,7 +71,10 @@ public static class PlanGrantSource
     public const string Purchase = "purchase";
     public const string Admin = "admin";
 
-    public static readonly string[] All = [Code, Purchase, Admin];
+    /// <summary>The service, moving an identity whose paid term ran out (and its grace) back to the free plan</summary>
+    public const string Expiry = "expiry";
+
+    public static readonly string[] All = [Code, Purchase, Admin, Expiry];
 }
 
 /// <summary>
@@ -98,7 +117,7 @@ public class PlanGrantStore
     /// </summary>
     /// <returns>The grant, and whether this call made it</returns>
     public async Task<(PlanGrant Grant, bool Created)> CreateAsync(string? identity, Plan plan, PlanPrice? price,
-        string? source, string? reference, string? hostHint, long now)
+        string? source, string? reference, string? hostHint, long now, string? note = null, string? madeBy = null)
     {
         var normalizedIdentity = DomainNames.Normalize(identity) ??
                                  throw new InvalidPlanGrantRequestException("Invalid identity");
@@ -126,9 +145,9 @@ public class PlanGrantStore
             """
             INSERT INTO plan_grants (identity, plan_id, quota_bytes, public_web_presence, price_months,
                                      price_amount_cents, source, reference, status, host_hint, attempts,
-                                     next_attempt_at, created_at, updated_at)
+                                     next_attempt_at, created_at, updated_at, ends_at, note, made_by)
             VALUES (@identity, @planId, @quotaBytes, @publicWebPresence, @priceMonths, @priceAmountCents, @source,
-                    @reference, 'pending', @hostHint, 0, @now, @now, @now)
+                    @reference, 'pending', @hostHint, 0, @now, @now, @now, @endsAt, @note, @madeBy)
             ON CONFLICT (reference) DO NOTHING;
             SELECT changes();
             """;
@@ -142,6 +161,9 @@ public class PlanGrantStore
         command.Parameters.AddWithValue("@reference", normalizedReference);
         command.Parameters.AddWithValue("@hostHint", (object?)normalizedHint ?? DBNull.Value);
         command.Parameters.AddWithValue("@now", now);
+        command.Parameters.AddWithValue("@endsAt", price == null ? DBNull.Value : TermEnd(now, price.Months));
+        command.Parameters.AddWithValue("@note", (object?)note?.Trim() is "" or null ? DBNull.Value : note!.Trim());
+        command.Parameters.AddWithValue("@madeBy", (object?)madeBy ?? DBNull.Value);
         var created = Convert.ToInt64(await command.ExecuteScalarAsync()) == 1;
 
         var grant = (await GetByReferenceAsync(connection, normalizedReference))!;
@@ -229,6 +251,65 @@ public class PlanGrantStore
     }
 
     /// <summary>
+    /// Every identity's subscription: its latest grant, whatever its status. Newest first.
+    /// </summary>
+    public async Task<List<PlanGrant>> CurrentAsync()
+    {
+        await using var connection = await OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = Select +
+                              " WHERE id IN (SELECT MAX(id) FROM plan_grants GROUP BY identity) ORDER BY id DESC;";
+        return await ReadAllAsync(command);
+    }
+
+    /// <summary>The identity's subscription: its latest grant; null when it has none</summary>
+    public async Task<PlanGrant?> CurrentForAsync(string identity)
+    {
+        await using var connection = await OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = Select + " WHERE identity = @identity ORDER BY id DESC LIMIT 1;";
+        command.Parameters.AddWithValue("@identity", identity);
+        return await ReadOneAsync(command);
+    }
+
+    /// <summary>
+    /// Subscriptions whose paid term ended before <paramref name="before"/> and that are still current: due to go
+    /// back to the free plan
+    /// </summary>
+    public async Task<List<PlanGrant>> EndedAsync(long before)
+    {
+        await using var connection = await OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = Select +
+                              " WHERE id IN (SELECT MAX(id) FROM plan_grants GROUP BY identity)" +
+                              " AND ends_at IS NOT NULL AND ends_at < @before ORDER BY ends_at;";
+        command.Parameters.AddWithValue("@before", before);
+        return await ReadAllAsync(command);
+    }
+
+    /// <summary>
+    /// Adds months to a paid term: from when it ends, or from now if that has passed. Null when there is no such
+    /// grant or it has no term.
+    /// </summary>
+    public async Task<PlanGrant?> ExtendAsync(long id, int months, long now)
+    {
+        if (months is < 1 or > BillingTerm.LongestMonths)
+        {
+            throw new InvalidPlanGrantRequestException($"Extend by 1 to {BillingTerm.LongestMonths} months");
+        }
+        var grant = await GetAsync(id);
+        if (grant?.EndsAt == null)
+        {
+            return null;
+        }
+        return await UpdateAsync(id, "ends_at = @endsAt", now, ("@endsAt", TermEnd(Math.Max(grant.EndsAt.Value, now), months)));
+    }
+
+    /// <summary>When a term of this many months from <paramref name="from"/> (unix ms) runs out</summary>
+    public static long TermEnd(long from, int months) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(from).AddMonths(months).ToUnixTimeMilliseconds();
+
+    /// <summary>
     /// How many grants are of this plan, whatever its case
     /// </summary>
     public async Task<int> CountWithPlanAsync(string planId)
@@ -245,6 +326,10 @@ public class PlanGrantStore
     public Task<PlanGrant?> MarkAppliedAsync(long id, string host, long now) =>
         UpdateAsync(id, "status = 'applied', host = @host, applied_at = @now, last_error = NULL, next_attempt_at = NULL, attempts = attempts + 1",
             now, ("@host", host));
+
+    /// <summary>An applied grant set on its host again: an add-on changed, or the host drifted</summary>
+    public Task<PlanGrant?> MarkReappliedAsync(long id, string host, long now) =>
+        UpdateAsync(id, "host = @host, reapplied_at = @now", now, ("@host", host));
 
     public Task<PlanGrant?> MarkFailedAsync(long id, string? host, string error, long now) =>
         UpdateAsync(id, "status = 'failed', host = COALESCE(@host, host), last_error = @error, next_attempt_at = NULL, attempts = attempts + 1",
@@ -313,7 +398,7 @@ public class PlanGrantStore
     private const string Select =
         """
         SELECT id, identity, plan_id, quota_bytes, public_web_presence, price_months, price_amount_cents, source, reference, status, host, host_hint, attempts, last_error, next_attempt_at,
-               created_at, updated_at, applied_at
+               created_at, updated_at, applied_at, ends_at, reapplied_at, note, made_by
         FROM plan_grants
         """;
 
@@ -384,7 +469,11 @@ public class PlanGrantStore
             Number(14),
             reader.GetInt64(15),
             reader.GetInt64(16),
-            Number(17));
+            Number(17),
+            Number(18),
+            Number(19),
+            Text(20),
+            Text(21));
     }
 
     private async Task<SqliteConnection> OpenAsync()
@@ -459,6 +548,16 @@ public class PlanGrantStore
             // and the price a purchase was made at
             await AddColumnIfMissingAsync(connection, "price_months", "INTEGER NULL");
             await AddColumnIfMissingAsync(connection, "price_amount_cents", "INTEGER NULL");
+            // Subscriptions: when a purchase runs out, when the host was last given it again, and why and by whom
+            // it was made
+            var addsEndsAt = await AddColumnIfMissingAsync(connection, "ends_at", "INTEGER NULL");
+            await AddColumnIfMissingAsync(connection, "reapplied_at", "INTEGER NULL");
+            await AddColumnIfMissingAsync(connection, "note", "TEXT NULL");
+            await AddColumnIfMissingAsync(connection, "made_by", "TEXT NULL");
+            if (addsEndsAt)
+            {
+                await BackfillEndsAtAsync(connection);
+            }
 
             _initialized = true;
         }
@@ -468,7 +567,31 @@ public class PlanGrantStore
         }
     }
 
-    private static async Task AddColumnIfMissingAsync(SqliteConnection connection, string column, string definition)
+    // Purchases made before terms ended: they run out their term's months after they were bought
+    private static async Task BackfillEndsAtAsync(SqliteConnection connection)
+    {
+        var purchases = new List<(long Id, long CreatedAt, int Months)>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.CommandText = "SELECT id, created_at, price_months FROM plan_grants WHERE price_months IS NOT NULL;";
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                purchases.Add((reader.GetInt64(0), reader.GetInt64(1), reader.GetInt32(2)));
+            }
+        }
+        foreach (var (id, createdAt, months) in purchases)
+        {
+            await using var update = connection.CreateCommand();
+            update.CommandText = "UPDATE plan_grants SET ends_at = @endsAt WHERE id = @id;";
+            update.Parameters.AddWithValue("@endsAt", TermEnd(createdAt, months));
+            update.Parameters.AddWithValue("@id", id);
+            await update.ExecuteNonQueryAsync();
+        }
+    }
+
+    // Whether it added it
+    private static async Task<bool> AddColumnIfMissingAsync(SqliteConnection connection, string column, string definition)
     {
         await using var columns = connection.CreateCommand();
         columns.CommandText = "SELECT COUNT(*) FROM pragma_table_info('plan_grants') WHERE name = @column;";
@@ -478,6 +601,8 @@ public class PlanGrantStore
             await using var alter = connection.CreateCommand();
             alter.CommandText = $"ALTER TABLE plan_grants ADD COLUMN {column} {definition};";
             await alter.ExecuteNonQueryAsync();
+            return true;
         }
+        return false;
     }
 }

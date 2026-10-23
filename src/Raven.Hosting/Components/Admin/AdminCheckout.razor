@@ -1,10 +1,11 @@
-@* Who may buy on the site: everyone when open, the testers while closed *@
-<AdminLayout Admin="Admin" Title="Who may buy" Section="purchases">
+@* Checkout, a beta switch while there is no real payment: everyone may buy when open, only the testers while closed *@
+<AdminLayout Admin="Admin" Title="Checkout" Section="checkout">
+    <p class="mb-6 text-sm text-muted">A beta switch: until there is real payment, the site's checkout is a test that gives the plan away, so it stays closed to all but the testers. Once payment is real, open it; closing it again stops all buying without taking the site down.</p>
     <section class="panel">
         <div class="flex flex-wrap items-center justify-between gap-4">
             <div>
                 <p class="font-heading text-xl font-bold @(Access.Open ? "text-green" : "text-amber-700")">
-                    Purchases are @(Access.Open ? "open" : "closed")
+                    Checkout is @(Access.Open ? "open" : "closed")
                 </p>
                 <p class="mt-1 text-sm text-muted">
                     @(Access.Open
@@ -12,18 +13,18 @@
                         : "Everyone can see the plans and sign in; only the testers below can check out. Admin grants are not affected.")
                 </p>
             </div>
-            <form method="post" action="@($"{AdminPages.Root}/purchases/open")"
-                  onsubmit="@(Access.Open ? "return confirm('Close purchases? Only testers will be able to buy.')" : "return confirm('Open purchases to everyone? There is no real payment yet.')")">
+            <form method="post" action="@($"{AdminPages.Root}/checkout/open")"
+                  onsubmit="@(Access.Open ? "return confirm('Close checkout? Only testers will be able to buy.')" : "return confirm('Open checkout to everyone? There is no real payment yet.')")">
                 <Csrf Admin="Admin" />
                 <input type="hidden" name="open" value="@(Access.Open ? "false" : "true")">
-                <button type="submit" class="btn @(Access.Open ? "btn-danger" : "")">@(Access.Open ? "Close purchases" : "Open purchases")</button>
+                <button type="submit" class="btn @(Access.Open ? "btn-danger" : "")">@(Access.Open ? "Close checkout" : "Open checkout")</button>
             </form>
         </div>
     </section>
 
     <section class="panel mt-6">
         <h2 class="panel-title">Testers</h2>
-        <form method="post" action="@($"{AdminPages.Root}/purchases/testers")" class="mb-4 flex flex-wrap items-end gap-3">
+        <form method="post" action="@($"{AdminPages.Root}/checkout/testers")" class="mb-4 flex flex-wrap items-end gap-3">
             <Csrf Admin="Admin" />
             <label class="field grow sm:grow-0">
                 Identity
@@ -45,7 +46,7 @@
                             <span class="font-semibold">@tester.Identity</span>
                             <span class="ml-1 text-xs text-muted">added @AdminForm.When(tester.AddedAt)</span>
                         </span>
-                        <form method="post" action="@($"{AdminPages.Root}/purchases/testers/{Uri.EscapeDataString(tester.Identity)}/remove")">
+                        <form method="post" action="@($"{AdminPages.Root}/checkout/testers/{Uri.EscapeDataString(tester.Identity)}/remove")">
                             <Csrf Admin="Admin" />
                             <button type="submit" class="btn btn-small btn-secondary">Remove</button>
                         </form>

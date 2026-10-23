@@ -1,5 +1,6 @@
-@* How the codes are doing: in total, by source, owner and plan, and per week; signups over a chosen time *@
-<AdminLayout Admin="Admin" Title="How codes are doing" Section="stats">
+@* Channels: how the codes are doing by source (the marketing channel), plan and owner, and per week; signups over a
+   chosen time *@
+<AdminLayout Admin="Admin" Title="Channels" Section="channels">
     <form method="get" action="@($"{AdminPages.Root}/codes/stats")" class="mb-6 flex flex-wrap items-end gap-3">
         <label class="field">
             Count signups from
@@ -26,7 +27,7 @@
     </div>
 
     <div class="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Breakdown Title="By source" Lines="Stats.BySource" Empty="(no source)" />
+        <Breakdown Title="By channel" Lines="Stats.BySource" Empty="(no channel)" />
         <Breakdown Title="By plan" Lines="Stats.ByPlan" Empty="(no plan)" />
         <Breakdown Title="By owner" Lines="Stats.ByOwner" Empty="(no owner)" />
 

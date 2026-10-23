@@ -1,0 +1,88 @@
+@* Renewals: paid subscriptions running out soon or in their grace, to win back before they go back to the free plan;
+   and those that already did *@
+<AdminLayout Admin="Admin" Title="Renewals" Section="renewals">
+    <Actions>
+        <a class="btn btn-secondary" href="@($"{AdminPages.Root}/renewals.csv?within={Within}")" download>Export CSV</a>
+    </Actions>
+    <ChildContent>
+        <p class="mb-4 text-sm text-muted">A paid subscription keeps its plan for @PlanService.Grace.Days days after it runs out, then goes back to the free plan; nothing is deleted. Extend one from its page.</p>
+        <div class="mb-4 flex flex-wrap gap-2">
+            @foreach (var (within, label) in Windows)
+            {
+                <a href="@($"{AdminPages.Root}/renewals?within={within}")"
+                   class="@(within == Within ? "tag bg-brand px-3 py-1 text-white no-underline" : "tag bg-page px-3 py-1 text-ink no-underline ring-1 ring-line hover:ring-brand")">@label</a>
+            }
+        </div>
+
+        <section class="panel">
+            @if (Rows.Count == 0)
+            {
+                <p class="text-sm text-muted">@(Within == "grace" ? "Nobody is in their grace." : $"No paid subscription runs out in the next {Within} days.")</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead><tr><th>Identity</th><th>Plan</th><th>Paid</th><th>Bought</th><th>Until</th><th></th></tr></thead>
+                        <tbody class="divide-y divide-line">
+                            @foreach (var row in Rows)
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="flex items-center gap-2">
+                                            <img src="@PublicProfiles.ImageUrl(row.Grant.Identity)" alt="" width="24" height="24" loading="lazy"
+                                                 referrerpolicy="no-referrer" class="size-6 shrink-0 rounded-full bg-line object-cover">
+                                            <a class="link" href="@AdminPages.SubscriptionUrl(row.Grant.Identity)">@row.Grant.Identity</a>
+                                            <CopyButton Text="@row.Grant.Identity" Label="identity" />
+                                        </span>
+                                    </td>
+                                    <td>@row.PlanName</td>
+                                    <td class="text-xs whitespace-nowrap">@(row.Grant.PriceAmountCents is { } cents && row.Grant.PriceMonths is { } months ? new PlanPrice(months, cents).Text : "")</td>
+                                    <td class="text-xs whitespace-nowrap text-muted">@AdminForm.Day(row.Grant.CreatedAt)</td>
+                                    <td class="text-xs whitespace-nowrap"><Until Row="row" /></td>
+                                    <td><a class="btn btn-small btn-secondary" href="@AdminPages.SubscriptionUrl(row.Grant.Identity)">Extend</a></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="panel mt-6">
+            <h2 class="panel-title">Back on the free plan, last 90 days</h2>
+            @if (Dropped.Count == 0)
+            {
+                <p class="text-sm text-muted">Nobody.</p>
+            }
+            else
+            {
+                <ul class="divide-y divide-line">
+                    @foreach (var grant in Dropped)
+                    {
+                        <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                            <span class="flex items-center gap-2">
+                                <a class="link" href="@AdminPages.SubscriptionUrl(grant.Identity)">@grant.Identity</a>
+                                <CopyButton Text="@grant.Identity" Label="identity" />
+                                <span class="text-xs text-muted">@grant.Note</span>
+                            </span>
+                            <span class="text-xs text-muted">@AdminForm.Day(grant.CreatedAt)</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    </ChildContent>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter] public List<SubscriptionRow> Rows { get; set; } = [];
+    [Parameter] public List<PlanGrant> Dropped { get; set; } = [];
+
+    /// <summary>7, 30 or 90 (days), or grace</summary>
+    [Parameter] public string Within { get; set; } = "30";
+
+    private static readonly (string Within, string Label)[] Windows =
+        [("7", "Next 7 days"), ("30", "Next 30 days"), ("90", "Next 90 days"), ("grace", "In grace")];
+}

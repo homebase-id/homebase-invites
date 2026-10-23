@@ -34,6 +34,7 @@ var purchaseAccess = new PurchaseAccessStore(databasePath);
 builder.Services.AddSingleton(purchaseAccess);
 var adminStore = new AdminStore(databasePath);
 builder.Services.AddSingleton(adminStore);
+builder.Services.AddSingleton(new AddOnStore(databasePath));
 builder.Services.AddSingleton(store);
 
 var planHosts = PlanHosts.FromConfiguration(builder.Configuration);
@@ -130,8 +131,10 @@ signup.MapPost("/validate", async (CodeRequest request) =>
 });
 
 // The code comes back with what its plan gives now, which the identity host stores on the new identity. A code whose
-// plan is not here (made before plans were) carries its plan Id alone, and the host uses its defaults.
-signup.MapPost("/use", async (CodeRequest request, ILogger<Program> logger) =>
+// plan is not here (made before plans were) carries its plan Id alone, and the host uses its defaults. A host that
+// says who is signing up (identity) starts their subscription here: a free one of the code's plan, with no end, set on
+// the host by the grant worker once the identity is there. Hosts that do not say leave it to the host alone.
+signup.MapPost("/use", async (CodeRequest request, ILogger<Program> logger, TimeProvider time) =>
 {
     var code = await store.TryUseAsync(request.Code);
     if (code == null)
@@ -144,6 +147,20 @@ signup.MapPost("/use", async (CodeRequest request, ILogger<Program> logger) =>
     {
         logger.LogWarning("Code {code} was used with plan {planId}, which is not a plan here: the identity host " +
                           "gives its default quota (raven.sh plan-create)", code.Code, code.PlanId);
+    }
+
+    if (plan != null && DomainNames.Normalize(request.Identity) is { } identity)
+    {
+        // Never in the way of the signup: the use is taken whatever happens here
+        try
+        {
+            await grantStore.CreateAsync(identity, plan, null, PlanGrantSource.Code, $"code:{code.Code}:{Guid.NewGuid():N}",
+                null, time.GetUtcNow().ToUnixTimeMilliseconds(), note: $"Signed up with code {code.Code}");
+        }
+        catch (Exception e) when (e is InvalidInvitationCodeRequestException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            logger.LogWarning(e, "Could not start {identity}'s subscription from code {code}", identity, code.Code);
+        }
     }
     return new UseResponse(true, UsedInvitationCode.From(code, plan));
 });
@@ -331,7 +348,8 @@ string Required(string key)
     return string.IsNullOrWhiteSpace(value) ? throw new InvalidOperationException($"{key} is not configured") : value;
 }
 
-public record CodeRequest(string? Code);
+/// <param name="Identity">On /use, who is signing up with it, if the host says: starts their subscription here</param>
+public record CodeRequest(string? Code, string? Identity = null);
 // EnablePublicWebPresence is optional and on by default: identity hosts from odin-core #1974 ignore it and take
 // public web presence from the plan. It is still stored and sent for hosts from before that.
 public record CreateRequest(string? Owner, int MaxUses, string? Source, bool? EnablePublicWebPresence,

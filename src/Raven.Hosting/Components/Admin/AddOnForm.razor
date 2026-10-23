@@ -1,0 +1,35 @@
+@* Giving an identity one kind of add-on: what it is (ChildContent), when it ends, and why *@
+<form method="post" action="@($"{AdminPages.SubscriptionUrl(Identity)}/add-ons")" class="flex flex-col gap-3 rounded-lg border border-line p-4">
+    <Csrf Admin="Admin" />
+    <input type="hidden" name="kind" value="@Kind">
+    <h3 class="text-sm font-semibold">@Title</h3>
+    @ChildContent
+    <label class="field">
+        Ends on
+        <input class="input" name="endsOn" type="date">
+        <span class="field-hint">Empty: until taken away.</span>
+    </label>
+    <label class="field">
+        Why
+        <input class="input" name="note" maxlength="200" placeholder="support goodwill">
+    </label>
+    @if (Hint != null)
+    {
+        <p class="text-xs text-muted">@Hint</p>
+    }
+    <div class="mt-auto"><button type="submit" class="btn btn-small">Add</button></div>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter, EditorRequired] public string Identity { get; set; } = "";
+
+    /// <summary>One of <see cref="AddOnKind"/></summary>
+    [Parameter, EditorRequired] public string Kind { get; set; } = "";
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Hint { get; set; }
+
+    /// <summary>The kind's own fields: an amount, on or off; none for one that is simply on</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

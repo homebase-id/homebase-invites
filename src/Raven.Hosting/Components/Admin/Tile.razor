@@ -1,0 +1,23 @@
+@* A number on the overview, linking to the page about it *@
+<a href="@Href" class="panel block no-underline hover:border-brand">
+    <p class="text-xs font-semibold tracking-wide text-muted uppercase">@Label</p>
+    <p class="mt-1 truncate font-heading text-3xl font-bold @Colour">@Value</p>
+    <p class="mt-1 text-sm text-muted">@Hint</p>
+</a>
+
+@code {
+    [Parameter, EditorRequired] public string Href { get; set; } = "";
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter] public string? Hint { get; set; }
+
+    /// <summary>warn or bad to draw the eye; null for the usual</summary>
+    [Parameter] public string? Tone { get; set; }
+
+    private string Colour => Tone switch
+    {
+        "bad" => "text-red-700",
+        "warn" => "text-amber-700",
+        _ => "text-brand",
+    };
+}
