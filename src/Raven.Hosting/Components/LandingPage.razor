@@ -22,16 +22,15 @@
     <ChildContent>
         <section aria-labelledby="plans-heading">
             <h2 id="plans-heading" class="section-heading">Plans and prices</h2>
-            <p class="who">
-                @if (Identity == null)
-                {
-                    <text>Prices are in US dollars. <a href="@SitePages.SignIn">Sign in</a> with your Homebase identity to choose a plan.</text>
-                }
-                else
-                {
-                    <text>Signed in as <strong>@Identity</strong>. Prices are in US dollars.</text>
-                }
-            </p>
+            @if (Identity == null)
+            {
+                <p class="who">Prices are in US dollars. <a href="@SitePages.SignIn">Sign in</a> with your Homebase identity to choose a plan.</p>
+            }
+            else
+            {
+                <SignedInAs Identity="@Identity" Name="@Name" />
+                <p class="who">Prices are in US dollars.</p>
+            }
 
             @if (Now != null)
             {
@@ -71,6 +70,9 @@
 @code {
     /// <summary>Who is signed in; null for a visitor</summary>
     [Parameter] public string? Identity { get; set; }
+
+    /// <summary>The name on their public profile card; null when it has none, or for a visitor</summary>
+    [Parameter] public string? Name { get; set; }
 
     /// <summary>What the owner has now, as their host says; null for a visitor, or when the host cannot say</summary>
     [Parameter] public IdentityOnHost? Now { get; set; }
