@@ -67,6 +67,21 @@
 
     @ChildContent
 </main>
+<script>
+    // Copy buttons (CopyButton): the text on the clipboard, and a tick for a moment; where the browser will not,
+    // the text in a box to copy by hand
+    document.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-copy]");
+        if (!button) return;
+        try {
+            await navigator.clipboard.writeText(button.dataset.copy);
+            button.dataset.copied = "";
+            setTimeout(() => delete button.dataset.copied, 1500);
+        } catch {
+            window.prompt("Copy this:", button.dataset.copy);
+        }
+    });
+</script>
 </body>
 </html>
 

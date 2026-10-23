@@ -33,7 +33,7 @@ public class UpgradeOptions
         DisplayName = string.IsNullOrWhiteSpace(displayName) ? PublicDomain : displayName.Trim();
     }
 
-    /// <summary>The service's own domain, e.g. invites.ravenhosting.cloud: the YouAuth client id; empty when off</summary>
+    /// <summary>The service's own domain, e.g. ravenhosting.cloud: the YouAuth client id; empty when off</summary>
     public string PublicDomain { get; }
 
     /// <summary>What the service calls itself on the identity's consent screen (.well-known/youauth-client.json)</summary>

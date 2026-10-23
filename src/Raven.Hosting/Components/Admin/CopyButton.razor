@@ -1,0 +1,18 @@
+@* A small button that puts Text on the clipboard, showing a tick for a moment once it has (AdminLayout's script) *@
+<button type="button" data-copy="@Text" title="@($"Copy {Label}")" aria-label="@($"Copy {Label}")"
+        class="group inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent text-muted hover:border-line hover:bg-white hover:text-brand focus-visible:outline-2 focus-visible:outline-brand data-copied:text-green">
+    <svg class="size-4 group-data-copied:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+    <svg class="hidden size-4 group-data-copied:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 6 9 17l-5-5"></path>
+    </svg>
+</button>
+
+@code {
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+
+    /// <summary>What is copied, for the tooltip and screen readers: "code", "sign-up link"</summary>
+    [Parameter] public string Label { get; set; } = "";
+}

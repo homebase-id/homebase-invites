@@ -256,7 +256,8 @@ public static class AdminPages
         // Codes
         //
 
-        admin.MapGet("/codes", async (HttpContext context, string? owner, InvitationCodeStore codes, PlanStore plans) =>
+        admin.MapGet("/codes", async (HttpContext context, string? owner, InvitationCodeStore codes, PlanStore plans,
+            PlanHosts hosts) =>
         {
             owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim();
             string? problem = null;
@@ -271,10 +272,17 @@ public static class AdminPages
                 problem = e.Message;
             }
             list.Reverse();
-            return Show<AdminCodes>(context, new { Codes = list, Plans = await plans.ListAsync(), Owner = owner }, problem);
+            return Show<AdminCodes>(context, new
+            {
+                Codes = list,
+                Plans = await plans.ListAsync(),
+                Owner = owner,
+                SignupHost = SignupHosts(hosts)[0],
+            }, problem);
         });
 
-        admin.MapPost("/codes", async (HttpContext context, IFormCollection form, InvitationCodeStore codes, PlanStore plans) =>
+        admin.MapPost("/codes", async (HttpContext context, IFormCollection form, InvitationCodeStore codes, PlanStore plans,
+            PlanHosts hosts) =>
         {
             try
             {
@@ -289,8 +297,13 @@ public static class AdminPages
             {
                 var list = await codes.ListAsync(null);
                 list.Reverse();
-                return Show<AdminCodes>(context, new { Codes = list, Plans = await plans.ListAsync(), Form = form },
-                    e.Message, StatusCodes.Status400BadRequest);
+                return Show<AdminCodes>(context, new
+                {
+                    Codes = list,
+                    Plans = await plans.ListAsync(),
+                    Form = form,
+                    SignupHost = SignupHosts(hosts)[0],
+                }, e.Message, StatusCodes.Status400BadRequest);
             }
         });
 
@@ -304,13 +317,14 @@ public static class AdminPages
             });
         });
 
-        admin.MapGet("/codes/{code}", async (HttpContext context, string code, InvitationCodeStore codes, PlanStore plans) =>
+        admin.MapGet("/codes/{code}", async (HttpContext context, string code, InvitationCodeStore codes, PlanStore plans,
+            PlanHosts hosts) =>
             await codes.GetAsync(code) is { } found
-                ? Show<AdminCode>(context, new { Code = found, Plans = await plans.ListAsync() })
+                ? Show<AdminCode>(context, new { Code = found, Plans = await plans.ListAsync(), SignupHosts = SignupHosts(hosts) })
                 : NotFound(context, "There is no such code."));
 
         admin.MapPost("/codes/{code}", async (HttpContext context, string code, IFormCollection form,
-            InvitationCodeStore codes, PlanStore plans) =>
+            InvitationCodeStore codes, PlanStore plans, PlanHosts hosts) =>
         {
             try
             {
@@ -330,8 +344,13 @@ public static class AdminPages
             catch (Exception e) when (IsRefusal(e))
             {
                 return await codes.GetAsync(code) is { } found
-                    ? Show<AdminCode>(context, new { Code = found, Plans = await plans.ListAsync(), Form = form },
-                        e.Message, StatusCodes.Status400BadRequest)
+                    ? Show<AdminCode>(context, new
+                    {
+                        Code = found,
+                        Plans = await plans.ListAsync(),
+                        Form = form,
+                        SignupHosts = SignupHosts(hosts),
+                    }, e.Message, StatusCodes.Status400BadRequest)
                     : NotFound(context, "There is no such code.");
             }
         });
@@ -463,6 +482,18 @@ public static class AdminPages
         await plans.DeleteAsync(plan.Id);
         return (true, null);
     }
+
+    /// <summary>
+    /// The provisioning servers a code can be signed up with, as the sign-up links offer them: the site's own sign-up
+    /// server first (SitePages.DefaultSignupUrl), then every identity host the service knows. A code works on any of
+    /// them: it is not tied to one.
+    /// </summary>
+    public static List<string> SignupHosts(PlanHosts hosts) =>
+        new[] { new Uri(SitePages.DefaultSignupUrl).Host }.Concat(hosts.Hosts).Distinct().ToList();
+
+    /// <summary>Where someone signs up with the code: the sign-up page, with the code filled in</summary>
+    public static string SignupUrl(string host, string code) =>
+        $"https://{host}/?invitation-code={Uri.EscapeDataString(code)}";
 
     public static string PlanUrl(string id) => $"{Root}/plans/{Uri.EscapeDataString(id)}";
 
@@ -622,6 +653,13 @@ public static class AdminForm
     public static string When(long? ms) => ms is { } value
         ? DateTimeOffset.FromUnixTimeMilliseconds(value).ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)
         : "";
+
+    /// <summary>
+    /// Marketing channels offered for a code's source, so the same one is spelled the same way and counts together in
+    /// the code stats; any other text is fine too
+    /// </summary>
+    public static readonly string[] SourceSuggestions =
+        ["X", "Instagram", "Facebook", "LinkedIn", "TikTok", "YouTube", "Reddit", "Newsletter", "Event", "Referral", "Website"];
 
     /// <summary>Cents as the price form shows them: 5, 4.99</summary>
     public static string Dollars(long cents) =>

@@ -5,14 +5,14 @@
 # Keys come from the environment, or from ~/.raven-hosting (never from this repo):
 #   RAVEN_HOSTING_CREATE_KEY=...
 #   RAVEN_HOSTING_SIGNUP_KEY=...
-#   RAVEN_HOSTING_URL=https://invites.ravenhosting.cloud   (optional; this is the default)
+#   RAVEN_HOSTING_URL=https://ravenhosting.cloud   (optional; this is the default)
 # Run `./raven.sh setup` once to write that file.
 #
 set -euo pipefail
 
 CONFIG="$HOME/.raven-hosting"
 [[ -f "$CONFIG" ]] && source "$CONFIG"
-URL="${RAVEN_HOSTING_URL:-https://invites.ravenhosting.cloud}"
+URL="${RAVEN_HOSTING_URL:-https://ravenhosting.cloud}"
 API="$URL/api/v1/invitation-codes"
 PLANS="$URL/api/v1/plans"
 GRANTS="$URL/api/v1/plans/grants"
