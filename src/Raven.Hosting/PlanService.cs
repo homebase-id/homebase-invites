@@ -46,6 +46,7 @@ public class PlanHosts
 public class PlanService(
     PlanGrantStore store,
     PlanStore planStore,
+    AddOnStore addOns,
     PlanHosts hosts,
     IHttpClientFactory httpClientFactory,
     TimeProvider time,
@@ -53,6 +54,9 @@ public class PlanService(
 {
     public const string HttpClientName = "plan-hosts";
     public const string ApiKeyHeader = "Odin-Api-Key";
+
+    /// <summary>How long after a paid term runs out the identity keeps its plan, before going back to the free plan</summary>
+    public static readonly TimeSpan Grace = TimeSpan.FromDays(14);
 
     // Pending grants wait 1, 2, 4... minutes between attempts, at most 6 hours: a paid plan is never given up on
     private static readonly TimeSpan FirstRetry = TimeSpan.FromMinutes(1);
@@ -71,8 +75,10 @@ public class PlanService(
     /// not exist, or a term it has no price for, is refused.
     /// </summary>
     /// <param name="months">The billing term bought, for a purchase; null for none</param>
+    /// <param name="note">Why it was made, shown in the identity's history</param>
+    /// <param name="madeBy">The admin who made it, on the admin pages</param>
     public async Task<PlanGrant> GrantAsync(string? identity, string? planId, string? source, string? reference,
-        string? host, int? months = null)
+        string? host, int? months = null, string? note = null, string? madeBy = null)
     {
         if (string.IsNullOrWhiteSpace(planId))
         {
@@ -86,7 +92,7 @@ public class PlanService(
             : plan.PriceFor(months) ??
               throw new InvalidPlanGrantRequestException($"Plan {plan.Id} has no price for {months} months");
 
-        var (grant, created) = await store.CreateAsync(identity, plan, price, source, reference, host, Now);
+        var (grant, created) = await store.CreateAsync(identity, plan, price, source, reference, host, Now, note, madeBy);
         return created || grant.Status == PlanGrantStatus.Pending ? await ApplyAsync(grant) : grant;
     }
 
@@ -97,6 +103,90 @@ public class PlanService(
     {
         var grant = await store.MakeDueAsync(id, Now);
         return grant == null ? null : await ApplyAsync(grant);
+    }
+
+    /// <summary>
+    /// Sets the identity's subscription on its host again, with its add-ons as they are now: after an add-on was
+    /// given or taken away. An applied one is set again straight away; a failed one is tried again; a pending one is
+    /// left to its next attempt, which sends the add-ons as they are then. Null when it has no subscription.
+    /// </summary>
+    public async Task<PlanGrant?> ReapplyAsync(string identity)
+    {
+        var current = await store.CurrentForAsync(identity);
+        switch (current?.Status)
+        {
+            case null:
+                return null;
+            case PlanGrantStatus.Failed:
+                return await RetryAsync(current.Id);
+            case PlanGrantStatus.Pending:
+                return current;
+        }
+
+        await _applyLock.WaitAsync();
+        try
+        {
+            var located = await LocateAsync(current.Identity, current.Host);
+            if (located.Host == null)
+            {
+                logger.LogWarning("Could not set {identity}'s add-ons: {error}", identity, located.Error);
+                return current;
+            }
+            var outcome = await SetPlanAsync(located.Host, current);
+            if (outcome.Status != HttpStatusCode.OK)
+            {
+                logger.LogWarning("Could not set {identity}'s add-ons on {host}: {error}", identity, located.Host,
+                    outcome.Error);
+                return current;
+            }
+            await store.SetKnownHostAsync(identity, located.Host, Now);
+            return await store.MarkReappliedAsync(current.Id, located.Host, Now);
+        }
+        finally
+        {
+            _applyLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Moves every identity whose paid term ran out more than <see cref="Grace"/> ago back to the free plan, as an
+    /// expiry grant; and takes away add-ons whose end date passed. Returns the identities moved.
+    /// </summary>
+    public async Task<List<string>> ExpireAsync()
+    {
+        foreach (var addOn in await addOns.EndedAsync(Now))
+        {
+            if (await addOns.RemoveAsync(addOn.Identity, addOn.Id, "expiry", Now) != null)
+            {
+                logger.LogInformation("Add-on {id} for {identity} ({addOn}) ran out", addOn.Id, addOn.Identity,
+                    addOn.Description);
+                await ReapplyAsync(addOn.Identity);
+            }
+        }
+
+        var moved = new List<string>();
+        var ended = await store.EndedAsync(Now - (long)Grace.TotalMilliseconds);
+        if (ended.Count == 0)
+        {
+            return moved;
+        }
+        var free = await planStore.GetAsync(SitePages.FreePlanId);
+        if (free == null)
+        {
+            logger.LogError("{count} paid subscription(s) ran out, but there is no '{free}' plan to move them to",
+                ended.Count, SitePages.FreePlanId);
+            return moved;
+        }
+        foreach (var grant in ended)
+        {
+            var when = DateTimeOffset.FromUnixTimeMilliseconds(grant.EndsAt!.Value).ToString("yyyy-MM-dd");
+            await GrantAsync(grant.Identity, free.Id, PlanGrantSource.Expiry, $"expiry-{grant.Id}", grant.Host,
+                note: $"{grant.PlanId} ran out on {when}; {Grace.Days} days' grace over");
+            moved.Add(grant.Identity);
+            logger.LogInformation("{identity}'s {planId} ran out on {when}: moved to {free}", grant.Identity,
+                grant.PlanId, when, free.Id);
+        }
+        return moved;
     }
 
     /// <summary>
@@ -190,7 +280,9 @@ public class PlanService(
             try
             {
                 var located = await LocateIdentityAsync(grant.Identity, grant.Host, skip: null);
-                var drift = located.Identity == null ? null : Drift(grant, located.Identity);
+                var drift = located.Identity == null
+                    ? null
+                    : Drift(grant, Entitlement.Of(grant, await addOns.ListAsync(grant.Identity)), located.Identity);
                 if (located.Host == null || drift == null)
                 {
                     continue;
@@ -200,6 +292,7 @@ public class PlanService(
                 if (outcome.Status == HttpStatusCode.OK)
                 {
                     await store.SetKnownHostAsync(grant.Identity, located.Host, Now);
+                    await store.MarkReappliedAsync(grant.Id, located.Host, Now);
                     corrected.Add(grant.Identity);
                     logger.LogWarning("Reconcile: {identity} had {drift} on {host}, set back to plan {planId} (grant {id})",
                         grant.Identity, drift, located.Host, grant.PlanId, grant.Id);
@@ -288,20 +381,21 @@ public class PlanService(
         return (await store.MarkPendingAsync(grant.Id, error, Now + (long)wait.TotalMilliseconds, Now))!;
     }
 
-    // What differs between the grant and the identity on its host, e.g. "quota 1048576"; null when nothing does
-    private static string? Drift(PlanGrant grant, IdentityOnHost identity)
+    // What differs between the grant, with its add-ons, and the identity on its host, e.g. "quota 1048576"; null
+    // when nothing does
+    private static string? Drift(PlanGrant grant, Entitlement entitlement, IdentityOnHost identity)
     {
         var drift = new List<string>();
         if (!string.Equals(identity.PlanId, grant.PlanId, StringComparison.OrdinalIgnoreCase))
         {
             drift.Add($"plan {identity.PlanId ?? "none"}");
         }
-        if (grant.QuotaBytes != null && identity.QuotaBytes != null && grant.QuotaBytes != identity.QuotaBytes)
+        if (entitlement.QuotaBytes != null && identity.QuotaBytes != null && entitlement.QuotaBytes != identity.QuotaBytes)
         {
             drift.Add($"quota {identity.QuotaBytes}");
         }
-        if (grant.PublicWebPresence != null && identity.PublicWebPresence != null &&
-            grant.PublicWebPresence != identity.PublicWebPresence)
+        if (entitlement.PublicWebPresence != null && identity.PublicWebPresence != null &&
+            entitlement.PublicWebPresence != identity.PublicWebPresence)
         {
             drift.Add($"public web presence {identity.PublicWebPresence}");
         }
@@ -335,8 +429,10 @@ public class PlanService(
         {
             using var request = new HttpRequestMessage(HttpMethod.Put, IdentityUrl(host, grant.Identity) + "/plan");
             request.Headers.Add(ApiKeyHeader, hosts.ApiKey);
+            // The plan with the identity's add-ons on top
+            var entitlement = Entitlement.Of(grant, await addOns.ListAsync(grant.Identity));
             request.Content = JsonContent.Create(
-                new HostSetPlan(grant.PlanId, grant.QuotaBytes, grant.PublicWebPresence, grant.Reference));
+                new HostSetPlan(grant.PlanId, entitlement.QuotaBytes, entitlement.PublicWebPresence, grant.Reference));
             using var response = await Client().SendAsync(request);
             return (response.StatusCode, response.IsSuccessStatusCode ? null : await DescribeAsync(response));
         }
@@ -368,7 +464,8 @@ public class PlanService(
 }
 
 /// <summary>
-/// Tries pending grants as they fall due, and once a day sets back any applied plan a host no longer has as granted
+/// Tries pending grants as they fall due, every hour moves paid subscriptions past their grace to the free plan and
+/// takes away add-ons that ran out, and once a day sets back any applied plan a host no longer has as granted
 /// </summary>
 public class PlanGrantWorker(PlanService plans, IConfiguration configuration, ILogger<PlanGrantWorker> logger)
     : BackgroundService
@@ -378,6 +475,9 @@ public class PlanGrantWorker(PlanService plans, IConfiguration configuration, IL
         var interval = TimeSpan.FromSeconds(configuration.GetValue("RavenHosting:GrantRetryIntervalSeconds", 60));
         var reconcileEvery = TimeSpan.FromHours(configuration.GetValue("RavenHosting:ReconcileIntervalHours", 24));
         var nextReconcile = DateTimeOffset.UtcNow + reconcileEvery;
+        // Paid terms and add-ons that ran out: hourly, so nobody keeps a plan much past their grace
+        var expireEvery = TimeSpan.FromMinutes(configuration.GetValue("RavenHosting:ExpiryIntervalMinutes", 60));
+        var nextExpiry = DateTimeOffset.UtcNow;
 
         using var timer = new PeriodicTimer(interval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -385,6 +485,15 @@ public class PlanGrantWorker(PlanService plans, IConfiguration configuration, IL
             try
             {
                 await plans.ApplyDueAsync();
+                if (DateTimeOffset.UtcNow >= nextExpiry)
+                {
+                    nextExpiry = DateTimeOffset.UtcNow + expireEvery;
+                    var moved = await plans.ExpireAsync();
+                    if (moved.Count > 0)
+                    {
+                        logger.LogInformation("Moved {count} expired subscription(s) to the free plan", moved.Count);
+                    }
+                }
                 if (DateTimeOffset.UtcNow >= nextReconcile)
                 {
                     nextReconcile = DateTimeOffset.UtcNow + reconcileEvery;
@@ -418,6 +527,17 @@ public record IdentityOnHost(
 {
     [System.Text.Json.Serialization.JsonExtensionData]
     public Dictionary<string, System.Text.Json.JsonElement>? More { get; init; }
+
+    /// <summary>
+    /// The part of <see cref="QuotaBytes"/> that is the identity's storage add-ons, which stay whatever plan it moves
+    /// to: set here, not by the host. Plans are compared with the rest.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long ExtraBytes { get; init; }
+
+    /// <summary>The quota its plan gives, without its storage add-ons</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long? PlanQuotaBytes => QuotaBytes - ExtraBytes;
 
     /// <summary>How full it is, when the host says both what it stores and its quota</summary>
     public StorageUse? Storage => QuotaBytes is { } quota && UsedBytes is { } used ? StorageUse.Of(used, quota) : null;

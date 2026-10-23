@@ -1,0 +1,21 @@
+@* Whether the identity's host has its subscription: in sync, pending (being tried) or failed (the host refused it) *@
+@switch (Grant.Status)
+{
+    case PlanGrantStatus.Applied:
+        <StatusTag Text="in sync" Tone="good" />
+        if (Grant.LastAppliedAt is { } at)
+        {
+            <span class="block text-xs whitespace-nowrap text-muted">@AdminForm.Day(at)</span>
+        }
+        break;
+    case PlanGrantStatus.Failed:
+        <StatusTag Text="failed" Tone="bad" />
+        break;
+    default:
+        <StatusTag Text="pending" Tone="warn" />
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired] public PlanGrant Grant { get; set; } = null!;
+}

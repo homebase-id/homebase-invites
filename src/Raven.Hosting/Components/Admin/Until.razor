@@ -1,0 +1,22 @@
+@* When a subscription runs out, and whether it is soon or past: "no end" for a free one *@
+@if (Row.Grant.EndsAt is { } ends)
+{
+    <span>@AdminForm.Day(ends)</span>
+    @switch (Row.State)
+    {
+        case "grace":
+            <StatusTag Text="@($"in grace, free on {AdminForm.Day(Row.GraceEndsAt)}")" Tone="bad" />
+            break;
+        case "expiring":
+            <StatusTag Text="@(Row.DaysLeft == 0 ? "today" : $"{Row.DaysLeft} day{(Row.DaysLeft == 1 ? "" : "s")} left")" Tone="warn" />
+            break;
+    }
+}
+else
+{
+    <span class="text-muted">no end</span>
+}
+
+@code {
+    [Parameter, EditorRequired] public SubscriptionRow Row { get; set; } = null!;
+}

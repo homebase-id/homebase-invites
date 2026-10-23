@@ -144,7 +144,10 @@ CHANGE A CODE  (create key)
   enable <code>
       Lets a disabled code work again.
 
-GRANT A PLAN  (create key)
+SUBSCRIPTIONS  (create key)
+  An identity's subscription is the latest plan granted to it; the admin pages (/admin) show them,
+  with add-ons, extending paid ones, and renewals.
+
   grant --id <identity> --plan <plan id> [--host <provisioning domain>] [--reference <ref>]
       Owes an identity a plan and sets it on the identity host that serves it, straight away. If no
       host can take it yet, the grant stays pending and the service keeps trying.
@@ -175,7 +178,7 @@ ADMIN PAGES  (create key)
   admins remove <identity>
       Takes it off the admins.
 
-WHO MAY BUY  (create key)
+CHECKOUT, WHO MAY BUY  (create key)
   Until real card processing is in, buying a plan on the upgrade page is locked: everyone can see
   the plans and sign in, but only testers can check out. A new service starts locked, with no
   testers. Admin grants (grant) are not affected.
@@ -189,7 +192,7 @@ WHO MAY BUY  (create key)
   purchases disallow <identity>
       Takes it off the testers.
 
-CONTENT REPORTS  (create key)
+ABUSE REPORTS  (create key)
   reports [--since <days>] [--json]
       Prints the reports filed on https://ravenhosting.cloud/report, newest first: who sent it and
       how to reach them, what and who it is about, what is wrong, where it is, and anything else

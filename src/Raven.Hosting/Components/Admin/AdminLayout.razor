@@ -36,16 +36,40 @@
     </div>
     <nav aria-label="Admin sections" class="mx-auto max-w-7xl overflow-x-auto px-2">
         <ul class="flex gap-1 whitespace-nowrap">
-            @foreach (var (key, label, href) in Sections)
+            @foreach (var group in Groups)
             {
                 <li>
-                    <a href="@href" aria-current="@(key == Section ? "page" : null)"
-                       class="@(key == Section ? "border-white text-white" : "border-transparent text-white/75 hover:text-white") inline-block border-b-2 px-3 py-2 text-sm font-semibold no-underline">@label</a>
+                    <a href="@group.Href" aria-current="@(group.Key == Group.Key ? "page" : null)"
+                       class="@(group.Key == Group.Key ? "border-white text-white" : "border-transparent text-white/75 hover:text-white") inline-block border-b-2 px-3 py-2 text-sm font-semibold no-underline">@group.Label</a>
                 </li>
             }
         </ul>
     </nav>
 </header>
+@if (Group.Pages.Length > 0)
+{
+    <nav aria-label="@Group.Label" class="border-b border-line bg-white">
+        <ul class="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-2 whitespace-nowrap">
+            @foreach (var (key, label, href) in Group.Pages)
+            {
+                <li>
+                    <a href="@href" aria-current="@(key == Section ? "page" : null)"
+                       class="@(key == Section ? "border-brand text-brand" : "border-transparent text-muted hover:text-ink") inline-block border-b-2 px-3 py-2 text-sm font-semibold no-underline">@label</a>
+                </li>
+            }
+        </ul>
+    </nav>
+}
+@if (!Admin.Checkout.Open)
+{
+    <a href="@($"{AdminPages.Root}/checkout")" class="block border-b border-amber-200 bg-amber-50 text-amber-900 no-underline hover:bg-amber-100">
+        <span class="mx-auto flex max-w-7xl flex-wrap items-center gap-x-2 px-4 py-1.5 text-xs">
+            <span class="tag bg-amber-200 text-amber-900">BETA</span>
+            <span>Checkout is closed to all but @Admin.Checkout.Testers.Count tester@(Admin.Checkout.Testers.Count == 1 ? "" : "s") until there is real payment.</span>
+            <span class="font-semibold underline">Manage</span>
+        </span>
+    </a>
+}
 
 <main class="mx-auto max-w-7xl px-4 py-6 sm:py-8">
     <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -89,7 +113,9 @@
     [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
     [Parameter, EditorRequired] public string Title { get; set; } = "";
 
-    /// <summary>Which section is open: home, plans, grants, codes, stats, purchases or reports</summary>
+    /// <summary>
+    /// Which page is open: home; subscriptions, plans or checkout; codes, channels or renewals; reports
+    /// </summary>
     [Parameter] public string Section { get; set; } = "home";
 
     /// <summary>Buttons beside the title</summary>
@@ -97,14 +123,23 @@
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    private static readonly (string Key, string Label, string Href)[] Sections =
+    private record NavGroup(string Key, string Label, string Href, (string Key, string Label, string Href)[] Pages, string[] Also);
+
+    // The groups in the bar, and each one's pages in the row under it. Checkout is a beta switch, not a tab: the
+    // strip under the bar goes to it while it is closed
+    private static readonly NavGroup[] Groups =
     [
-        ("home", "Overview", AdminPages.Root),
-        ("plans", "Plans", $"{AdminPages.Root}/plans"),
-        ("grants", "Grants", $"{AdminPages.Root}/grants"),
-        ("codes", "Codes", $"{AdminPages.Root}/codes"),
-        ("stats", "Code stats", $"{AdminPages.Root}/codes/stats"),
-        ("purchases", "Who may buy", $"{AdminPages.Root}/purchases"),
-        ("reports", "Reports", $"{AdminPages.Root}/reports"),
+        new("home", "Overview", AdminPages.Root, [], []),
+        new("subscriptions", "Subscriptions", $"{AdminPages.Root}/subscriptions",
+            [("subscriptions", "Subscriptions", $"{AdminPages.Root}/subscriptions"), ("plans", "Plans", $"{AdminPages.Root}/plans")],
+            ["checkout"]),
+        new("marketing", "Marketing", $"{AdminPages.Root}/codes",
+            [("codes", "Codes", $"{AdminPages.Root}/codes"), ("channels", "Channels", $"{AdminPages.Root}/codes/stats"),
+             ("renewals", "Renewals", $"{AdminPages.Root}/renewals")],
+            []),
+        new("safety", "Safety", $"{AdminPages.Root}/reports", [("reports", "Abuse reports", $"{AdminPages.Root}/reports")], []),
     ];
+
+    private NavGroup Group => Groups.FirstOrDefault(g => g.Key == Section || g.Pages.Any(p => p.Key == Section) || g.Also.Contains(Section))
+                              ?? Groups[0];
 }

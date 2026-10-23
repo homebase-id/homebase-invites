@@ -1,65 +1,55 @@
-@* The overview: how plans, grants, codes, buying and reports stand, the grants that need a look, and the admins *@
+@* The overview: how subscriptions, marketing and safety stand, the subscriptions that need a look, and the admins *@
 <AdminLayout Admin="Admin" Title="Overview" Section="home">
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <a href="@($"{AdminPages.Root}/plans")" class="panel block no-underline hover:border-brand">
-            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Plans</p>
-            <p class="mt-1 font-heading text-3xl font-bold text-brand">@Plans.Count</p>
-            <p class="mt-1 text-sm text-muted">@Plans.Count(UpgradePage.IsForSale) for sale</p>
-        </a>
-        <a href="@($"{AdminPages.Root}/grants")" class="panel block no-underline hover:border-brand">
-            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Grants</p>
-            <p class="mt-1 font-heading text-3xl font-bold text-brand">@Grants.Count</p>
-            <p class="mt-1 text-sm">
-                <span class="@(Failed.Count > 0 ? "font-semibold text-red-700" : "text-muted")">@Failed.Count failed</span>
-                <span class="text-muted">·</span>
-                <span class="@(Pending.Count > 0 ? "font-semibold text-amber-700" : "text-muted")">@Pending.Count pending</span>
-            </p>
-        </a>
-        <a href="@($"{AdminPages.Root}/codes")" class="panel block no-underline hover:border-brand">
-            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Codes</p>
-            <p class="mt-1 font-heading text-3xl font-bold text-brand">@Stats.Totals.Codes</p>
-            <p class="mt-1 text-sm text-muted">@Stats.Totals.Signups signups · @Stats.Totals.UsesLeft left</p>
-        </a>
-        <a href="@($"{AdminPages.Root}/purchases")" class="panel block no-underline hover:border-brand">
-            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Buying</p>
-            <p class="mt-1 font-heading text-3xl font-bold @(Access.Open ? "text-green" : "text-amber-700")">@(Access.Open ? "Open" : "Closed")</p>
-            <p class="mt-1 text-sm text-muted">@Access.Testers.Count tester@(Access.Testers.Count == 1 ? "" : "s")</p>
-        </a>
-        <a href="@($"{AdminPages.Root}/reports?days=7")" class="panel block no-underline hover:border-brand">
-            <p class="text-xs font-semibold tracking-wide text-muted uppercase">Reports</p>
-            <p class="mt-1 font-heading text-3xl font-bold @(RecentReports > 0 ? "text-red-700" : "text-brand")">@RecentReports</p>
-            <p class="mt-1 text-sm text-muted">in the last 7 days</p>
-        </a>
+    <h2 class="mb-3 text-xs font-semibold tracking-wide text-muted uppercase">Subscriptions</h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile Href="@($"{AdminPages.Root}/subscriptions")" Label="Subscriptions" Value="@Subscriptions.Count.ToString()"
+              Hint="@($"{Counts.GetValueOrDefault("paid")} paid · {Counts.GetValueOrDefault("free")} free")" />
+        <Tile Href="@($"{AdminPages.Root}/renewals?within=30")" Label="Running out in 30 days"
+              Value="@Counts.GetValueOrDefault("expiring").ToString()" Tone="@(Counts.GetValueOrDefault("expiring") > 0 ? "warn" : null)"
+              Hint="@($"{Counts.GetValueOrDefault("grace")} in grace")" />
+        <Tile Href="@($"{AdminPages.Root}/subscriptions?state=out-of-sync")" Label="Host not in sync"
+              Value="@Counts.GetValueOrDefault("out-of-sync").ToString()" Tone="@(Counts.GetValueOrDefault("out-of-sync") > 0 ? "bad" : null)"
+              Hint="pending or failed" />
+        <Tile Href="@($"{AdminPages.Root}/plans")" Label="Plans" Value="@Plans.Count.ToString()"
+              Hint="@($"{Plans.Count(UpgradePage.IsForSale)} for sale")" />
     </div>
 
-    <section class="panel mt-6">
-        <h2 class="panel-title">Grants that need a look</h2>
-        @if (Failed.Count + Pending.Count == 0)
+    <h2 class="mt-8 mb-3 text-xs font-semibold tracking-wide text-muted uppercase">Marketing</h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile Href="@($"{AdminPages.Root}/codes")" Label="Codes" Value="@Stats.Totals.Codes.ToString()"
+              Hint="@($"{Stats.Totals.UsesLeft} signup{(Stats.Totals.UsesLeft == 1 ? "" : "s")} left")" />
+        <Tile Href="@($"{AdminPages.Root}/codes/stats?days=7")" Label="Signups this week" Value="@WeekStats.Totals.Signups.ToString()"
+              Hint="@($"{Stats.Totals.Signups} in all")" />
+        <Tile Href="@($"{AdminPages.Root}/codes/stats?days=7")" Label="Top channel this week" Value="@(TopChannel?.Name ?? "-")"
+              Hint="@(TopChannel != null ? $"{TopChannel.Signups} signups" : "no signups yet")" />
+    </div>
+
+    <h2 class="mt-8 mb-3 text-xs font-semibold tracking-wide text-muted uppercase">Safety</h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile Href="@($"{AdminPages.Root}/reports?days=7")" Label="Abuse reports" Value="@RecentReports.ToString()"
+              Tone="@(RecentReports > 0 ? "bad" : null)" Hint="in the last 7 days" />
+    </div>
+
+    <section class="panel mt-8">
+        <h2 class="panel-title">Subscriptions that need a look</h2>
+        @if (NeedALook.Count == 0)
         {
-            <p class="text-sm text-muted">None: every grant is applied.</p>
+            <p class="text-sm text-muted">None: every host has its subscription, and nobody is in their grace.</p>
         }
         else
         {
             <div class="table-wrap">
                 <table class="table">
-                    <thead><tr><th>Id</th><th>Identity</th><th>Plan</th><th>Status</th><th>Attempts</th><th>Last error</th><th></th></tr></thead>
+                    <thead><tr><th>Identity</th><th>Plan</th><th>Until</th><th>Host</th><th>Last error</th></tr></thead>
                     <tbody class="divide-y divide-line">
-                        @foreach (var grant in Failed.Concat(Pending).Take(20))
+                        @foreach (var row in NeedALook.Take(20))
                         {
                             <tr>
-                                <td class="tabular-nums">@grant.Id</td>
-                                <td><a class="link" href="@($"{AdminPages.Root}/grants?identity={Uri.EscapeDataString(grant.Identity)}")">@grant.Identity</a></td>
-                                <td>@grant.PlanId</td>
-                                <td><StatusTag Text="@grant.Status" /></td>
-                                <td class="tabular-nums">@grant.Attempts</td>
-                                <td class="max-w-xs text-xs break-words text-muted">@grant.LastError</td>
-                                <td>
-                                    <form method="post" action="@($"{AdminPages.Root}/grants/{grant.Id}/retry")">
-                                        <Csrf Admin="Admin" />
-                                        <input type="hidden" name="back" value="@AdminPages.Root">
-                                        <button type="submit" class="btn btn-small btn-secondary">Retry</button>
-                                    </form>
-                                </td>
+                                <td><a class="link" href="@AdminPages.SubscriptionUrl(row.Grant.Identity)">@row.Grant.Identity</a></td>
+                                <td>@row.PlanName</td>
+                                <td class="text-xs whitespace-nowrap"><Until Row="row" /></td>
+                                <td><SyncTag Grant="row.Grant" /></td>
+                                <td class="max-w-xs text-xs break-words text-muted">@(row.Grant.Status == PlanGrantStatus.Applied ? "" : row.Grant.LastError)</td>
                             </tr>
                         }
                     </tbody>
@@ -90,12 +80,22 @@
 @code {
     [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
     [Parameter] public List<Plan> Plans { get; set; } = [];
-    [Parameter] public List<PlanGrant> Grants { get; set; } = [];
+    [Parameter] public List<SubscriptionRow> Subscriptions { get; set; } = [];
+    [Parameter] public Dictionary<string, int> Counts { get; set; } = [];
     [Parameter] public InvitationCodeStats Stats { get; set; } = null!;
-    [Parameter] public PurchaseAccess Access { get; set; } = null!;
+
+    /// <summary>The same, counting only the last 7 days' signups</summary>
+    [Parameter] public InvitationCodeStats WeekStats { get; set; } = null!;
+
     [Parameter] public int RecentReports { get; set; }
     [Parameter] public List<Raven.Hosting.Admin> Admins { get; set; } = [];
 
-    private List<PlanGrant> Failed => Grants.Where(g => g.Status == PlanGrantStatus.Failed).ToList();
-    private List<PlanGrant> Pending => Grants.Where(g => g.Status == PlanGrantStatus.Pending).ToList();
+    private InvitationCodeStatsLine? TopChannel =>
+        WeekStats.BySource.Where(l => l.Signups > 0 && l.Name != null).MaxBy(l => l.Signups);
+
+    // Hosts that do not have theirs, then those in their grace
+    private List<SubscriptionRow> NeedALook =>
+        Subscriptions.Where(r => r.Grant.Status != PlanGrantStatus.Applied)
+            .Concat(Subscriptions.Where(r => r.Grant.Status == PlanGrantStatus.Applied && r.State == "grace"))
+            .ToList();
 }

@@ -1,0 +1,275 @@
+@* One identity's subscription: what it is on and until when, what it gets with its add-ons, whether its host has it;
+   extending it, add-ons, changing its plan; and its history *@
+<AdminLayout Admin="Admin" Title="@Identity" Section="subscriptions">
+    <Actions>
+        <a class="btn btn-secondary" href="@($"{AdminPages.Root}/subscriptions")">All subscriptions</a>
+    </Actions>
+    <ChildContent>
+        <div class="mb-6 flex items-center gap-3">
+            <img src="@PublicProfiles.ImageUrl(Identity)" alt="" width="48" height="48" referrerpolicy="no-referrer"
+                 class="size-12 rounded-full bg-line object-cover">
+            <a class="link text-sm" href="@($"https://{Identity}")" target="_blank" rel="noopener">https://@Identity</a>
+        </div>
+
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <section class="panel lg:col-span-2">
+                <h2 class="panel-title">Subscription</h2>
+                @if (Row == null)
+                {
+                    <p class="text-sm text-muted">No subscription here yet: its host has whatever plan it was given at signup. Change its plan below to start one.</p>
+                }
+                else
+                {
+                    var g = Row.Grant;
+                    <dl class="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[9rem_1fr]">
+                        <dt class="font-semibold text-muted">Plan</dt>
+                        <dd><a class="link" href="@AdminPages.PlanUrl(g.PlanId)">@Row.PlanName</a></dd>
+                        <dt class="font-semibold text-muted">How</dt>
+                        <dd>@Row.How@(g.MadeBy != null ? $", by {g.MadeBy}" : "")@(g.Note != null ? $": {g.Note}" : "")</dd>
+                        <dt class="font-semibold text-muted">Since</dt>
+                        <dd>@AdminForm.When(g.CreatedAt)</dd>
+                        <dt class="font-semibold text-muted">Until</dt>
+                        <dd class="flex flex-wrap items-center gap-2"><Until Row="Row" /></dd>
+                        <dt class="font-semibold text-muted">Storage</dt>
+                        <dd>
+                            @if (Row.Entitlement.QuotaBytes is { } quota)
+                            {
+                                <span class="font-semibold">@StorageSize.Format(quota)</span>
+                                @if (Row.Entitlement.ExtraBytes > 0 && g.QuotaBytes is { } planQuota)
+                                {
+                                    <span class="text-muted"> = @StorageSize.Format(planQuota) plan + @StorageSize.Format(Row.Entitlement.ExtraBytes) add-ons</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="text-muted">the host's own (an old grant that did not say)</span>
+                            }
+                        </dd>
+                        <dt class="font-semibold text-muted">Public home page</dt>
+                        <dd>
+                            @(Row.Entitlement.PublicWebPresence switch { true => "yes", false => "no", null => "the host's own" })
+                            @if (Row.Entitlement.PublicWebPresence != g.PublicWebPresence)
+                            {
+                                <span class="text-muted"> (an add-on; the plan says @(g.PublicWebPresence == true ? "yes" : "no"))</span>
+                            }
+                        </dd>
+                        <dt class="font-semibold text-muted">Host</dt>
+                        <dd class="flex flex-wrap items-center gap-2">
+                            <SyncTag Grant="g" />
+                            <span class="text-xs text-muted">@(g.Host ?? g.HostHint ?? "not found yet")</span>
+                            @if (g.LastAppliedAt is { } at)
+                            {
+                                <span class="text-xs text-muted">· last set @AdminForm.When(at)</span>
+                            }
+                        </dd>
+                        @if (g.LastError != null && g.Status != PlanGrantStatus.Applied)
+                        {
+                            <dt class="font-semibold text-muted">Last error</dt>
+                            <dd class="text-xs break-words text-red-800">@g.LastError</dd>
+                        }
+                    </dl>
+                    <form method="post" action="@($"{AdminPages.SubscriptionUrl(Identity)}/apply")" class="mt-5">
+                        <Csrf Admin="Admin" />
+                        <button type="submit" class="btn btn-secondary">@(g.Status == PlanGrantStatus.Applied ? "Set on its host again" : "Try its host now")</button>
+                    </form>
+                }
+            </section>
+
+            <section class="panel">
+                <h2 class="panel-title">Extend</h2>
+                @if (Row?.IsPaid == true)
+                {
+                    <p class="mb-3 text-sm text-muted">Adds time to the paid term, from when it runs out (or from today, if that has passed), free of charge.</p>
+                    <form method="post" action="@($"{AdminPages.SubscriptionUrl(Identity)}/extend")" class="flex flex-wrap items-end gap-3">
+                        <Csrf Admin="Admin" />
+                        <label class="field">
+                            Months
+                            <input class="input w-28" name="months" type="number" min="1" max="@BillingTerm.LongestMonths" value="1" required>
+                        </label>
+                        <button type="submit" class="btn">Extend</button>
+                    </form>
+                }
+                else
+                {
+                    <p class="text-sm text-muted">Only a paid subscription runs out; this one has no end.</p>
+                }
+            </section>
+        </div>
+
+        <section class="panel mt-6">
+            <h2 class="panel-title">Add-ons</h2>
+            <p class="mb-4 text-sm text-muted">On top of the plan, whatever plan it is on: they stay when the plan changes or a paid term runs out. Each can end on a date.</p>
+            @if (AddOns.Count == 0)
+            {
+                <p class="mb-4 text-sm text-muted">None.</p>
+            }
+            else
+            {
+                <ul class="mb-6 divide-y divide-line">
+                    @foreach (var addOn in AddOns)
+                    {
+                        <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm @(addOn.IsActive ? "" : "opacity-60")">
+                            <span>
+                                <span class="font-semibold">@addOn.Description</span>
+                                @if (!AddOnKind.IsSentToHosts(addOn.Kind))
+                                {
+                                    <StatusTag Text="recorded only" Tone="plain" />
+                                }
+                                <span class="block text-xs text-muted">
+                                    Added @AdminForm.Day(addOn.AddedAt)@(addOn.AddedBy != null ? $" by {addOn.AddedBy}" : "")@(addOn.Note != null ? $": {addOn.Note}" : "")
+                                    @if (addOn.IsActive && addOn.EndsAt != null)
+                                    {
+                                        <text> · ends @AdminForm.Day(addOn.EndsAt)</text>
+                                    }
+                                    @if (!addOn.IsActive)
+                                    {
+                                        <text> · @(addOn.RemovedBy == "expiry" ? "ran out" : $"taken away by {addOn.RemovedBy}") @AdminForm.Day(addOn.RemovedAt)</text>
+                                    }
+                                </span>
+                            </span>
+                            @if (addOn.IsActive)
+                            {
+                                <form method="post" action="@($"{AdminPages.SubscriptionUrl(Identity)}/add-ons/{addOn.Id}/remove")"
+                                      onsubmit="return confirm('Take this add-on away?')">
+                                    <Csrf Admin="Admin" />
+                                    <button type="submit" class="btn btn-small btn-secondary">Take away</button>
+                                </form>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <AddOnForm Admin="Admin" Identity="@Identity" Kind="@AddOnKind.Storage" Title="More storage">
+                    <div class="flex gap-2">
+                        <input class="input" name="amount" required inputmode="decimal" placeholder="100" aria-label="Amount">
+                        <select class="input w-24" name="unit" aria-label="Unit"><option>GB</option><option>TB</option></select>
+                    </div>
+                </AddOnForm>
+                <AddOnForm Admin="Admin" Identity="@Identity" Kind="@AddOnKind.PublicWebPresence" Title="Public home page"
+                           Hint="Off takes it away whatever the plan says: a safety tool.">
+                    <select class="input" name="on" aria-label="On or off"><option value="true">On</option><option value="false">Off</option></select>
+                </AddOnForm>
+                <AddOnForm Admin="Admin" Identity="@Identity" Kind="@AddOnKind.PublicEmail" Title="Public email address"
+                           Hint="Recorded only: email is not offered yet." />
+                <AddOnForm Admin="Admin" Identity="@Identity" Kind="@AddOnKind.EmailAliases" Title="More email aliases"
+                           Hint="Recorded only: email is not offered yet.">
+                    <input class="input" name="amount" type="number" min="1" required placeholder="3" aria-label="Aliases">
+                </AddOnForm>
+            </div>
+        </section>
+
+        <form method="post" action="@($"{AdminPages.Root}/subscriptions")" class="panel mt-6">
+            <Csrf Admin="Admin" />
+            <input type="hidden" name="identity" value="@Identity">
+            <h2 class="panel-title">Change its plan</h2>
+            <div class="grid grid-cols-1 gap-5 md:grid-cols-3">
+                <label class="field">
+                    Plan
+                    <select class="input" name="planId" required>
+                        <option value="">Choose a plan</option>
+                        @foreach (var plan in Plans)
+                        {
+                            <option value="@plan.Id">@plan.Name (@plan.Storage)</option>
+                        }
+                    </select>
+                </label>
+                <label class="field">
+                    Why
+                    <input class="input" name="note" maxlength="200" placeholder="support goodwill">
+                </label>
+                <label class="field">
+                    Host
+                    <select class="input" name="host">
+                        <option value="">@(Row?.Grant.Host != null ? $"Its host ({Row.Grant.Host})" : "Find it")</option>
+                        @foreach (var host in Hosts)
+                        {
+                            <option value="@host">@host</option>
+                        }
+                    </select>
+                </label>
+            </div>
+            <p class="mt-4 text-xs text-muted">A free subscription with no end, replacing the current one@(Row?.IsPaid == true ? ", which is paid: what is left of its term is not carried over" : "").</p>
+            <div class="mt-4"><button type="submit" class="btn">Change the plan</button></div>
+        </form>
+
+        <section class="panel mt-6">
+            <h2 class="panel-title">History</h2>
+            @if (History.Count == 0)
+            {
+                <p class="text-sm text-muted">Nothing yet.</p>
+            }
+            else
+            {
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead><tr><th>When</th><th>Plan</th><th>How</th><th>Until</th><th>Host</th><th>Ref</th></tr></thead>
+                        <tbody class="divide-y divide-line">
+                            @foreach (var grant in History)
+                            {
+                                <tr>
+                                    <td class="text-xs whitespace-nowrap">@AdminForm.When(grant.CreatedAt)</td>
+                                    <td class="whitespace-nowrap">
+                                        @grant.PlanId
+                                        @if (grant.QuotaBytes is { } quota)
+                                        {
+                                            <span class="block text-xs text-muted">@StorageSize.Format(quota)</span>
+                                        }
+                                    </td>
+                                    <td class="text-xs">
+                                        @Source(grant)
+                                        @if (grant.MadeBy != null)
+                                        {
+                                            <span class="block text-muted">by @grant.MadeBy</span>
+                                        }
+                                        @if (grant.Note != null)
+                                        {
+                                            <span class="block text-muted">@grant.Note</span>
+                                        }
+                                    </td>
+                                    <td class="text-xs whitespace-nowrap">@(grant.EndsAt != null ? AdminForm.Day(grant.EndsAt) : "no end")</td>
+                                    <td>
+                                        <SyncTag Grant="grant" />
+                                        @if (grant.LastError != null && grant.Status != PlanGrantStatus.Applied)
+                                        {
+                                            <span class="block max-w-xs text-xs break-words text-muted">@grant.LastError</span>
+                                        }
+                                    </td>
+                                    <td class="max-w-40 truncate text-xs text-muted" title="@grant.Reference">@grant.Reference</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </ChildContent>
+</AdminLayout>
+
+@code {
+    [Parameter, EditorRequired] public AdminContext Admin { get; set; } = null!;
+    [Parameter, EditorRequired] public string Identity { get; set; } = "";
+
+    /// <summary>Its subscription; null when it has none here</summary>
+    [Parameter] public SubscriptionRow? Row { get; set; }
+
+    /// <summary>Its grants, newest (the subscription) first</summary>
+    [Parameter] public List<PlanGrant> History { get; set; } = [];
+
+    /// <summary>Its add-ons, active and removed, newest first</summary>
+    [Parameter] public List<AddOn> AddOns { get; set; } = [];
+
+    [Parameter] public List<Plan> Plans { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> Hosts { get; set; } = [];
+
+    private static string Source(PlanGrant grant) => grant.Source switch
+    {
+        PlanGrantSource.Purchase => grant.PriceAmountCents is { } cents && grant.PriceMonths is { } months
+            ? $"Bought, {new PlanPrice(months, cents).Text}"
+            : "Bought",
+        PlanGrantSource.Code => "Code signup",
+        PlanGrantSource.Expiry => "Paid term ran out",
+        _ => "Admin",
+    };
+}
