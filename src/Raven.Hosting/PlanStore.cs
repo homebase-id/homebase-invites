@@ -553,9 +553,9 @@ public class PlanStore
         }
     }
 
-    // The first plans table had a column per field and a free-text price. Its plans move into documents, and the
-    // table is replaced by the Id-and-JSON one. The price text is not a price, so they have none, and so are not for
-    // sale: a plan for sale needs one.
+    // Before documents, plans were a column per field, and their prices a plan_prices table (before that, a free-text
+    // price column, which is not a price and is left behind). The plans and their prices move into documents as they
+    // were, for sale or not, and both tables are replaced by the Id-and-JSON one.
     private static async Task MoveColumnsToJsonAsync(SqliteConnection connection)
     {
         await using (var columns = connection.CreateCommand())
@@ -568,6 +568,27 @@ public class PlanStore
         }
 
         await using var transaction = connection.BeginTransaction(deferred: false);
+
+        var prices = new Dictionary<string, List<PlanPrice>>(StringComparer.OrdinalIgnoreCase);
+        await using (var table = connection.CreateCommand())
+        {
+            table.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'plan_prices';";
+            if (Convert.ToInt64(await table.ExecuteScalarAsync()) == 1)
+            {
+                await using var select = connection.CreateCommand();
+                select.CommandText = "SELECT plan_id, months, amount_cents FROM plan_prices ORDER BY months;";
+                await using var reader = await select.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    if (!prices.TryGetValue(reader.GetString(0), out var list))
+                    {
+                        prices[reader.GetString(0)] = list = [];
+                    }
+                    list.Add(new PlanPrice(reader.GetInt32(1), reader.GetInt64(2)));
+                }
+            }
+        }
+
         var plans = new List<Plan>();
         await using (var select = connection.CreateCommand())
         {
@@ -578,7 +599,9 @@ public class PlanStore
             while (await reader.ReadAsync())
             {
                 plans.Add(new Plan(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3),
-                    reader.GetBoolean(4), false, [], reader.GetInt32(6), reader.GetInt64(7), reader.GetInt64(8)));
+                    reader.GetBoolean(4), reader.GetBoolean(5),
+                    prices.TryGetValue(reader.GetString(0), out var planPrices) ? planPrices : [],
+                    reader.GetInt32(6), reader.GetInt64(7), reader.GetInt64(8)));
             }
         }
 
@@ -586,6 +609,7 @@ public class PlanStore
         {
             replace.CommandText =
                 """
+                DROP TABLE IF EXISTS plan_prices;
                 DROP TABLE plans;
                 CREATE TABLE plans (
                     id TEXT NOT NULL PRIMARY KEY COLLATE NOCASE,

@@ -88,6 +88,55 @@ public class PlanPriceTests
     }
 
     [Test]
+    public async Task ThePlansAndPricesTablesFromBeforeMoveIntoDocuments()
+    {
+        var path = TempDatabase.NewPath();
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={path}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                // The shape live had with prices in their own table: a plan for sale with prices, and one without
+                command.CommandText =
+                    """
+                    CREATE TABLE plans (
+                        id TEXT NOT NULL PRIMARY KEY COLLATE NOCASE, name TEXT NOT NULL, description TEXT NOT NULL,
+                        quota_bytes INTEGER NOT NULL CHECK (quota_bytes > 0), public_web_presence INTEGER NOT NULL,
+                        for_sale INTEGER NOT NULL, sort_order INTEGER NOT NULL, created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL);
+                    CREATE TABLE plan_prices (plan_id TEXT NOT NULL COLLATE NOCASE, months INTEGER NOT NULL,
+                        amount_cents INTEGER NOT NULL, PRIMARY KEY (plan_id, months));
+                    INSERT INTO plans VALUES ('pro', 'Pro', 'Everything', 1099511627776, 1, 1, 3, 10, 20);
+                    INSERT INTO plans VALUES ('personal', 'Personal', '', 107374182400, 1, 1, 1, 10, 20);
+                    INSERT INTO plans VALUES ('free', 'Free', '', 64424509440, 1, 0, 0, 10, 20);
+                    INSERT INTO plan_prices VALUES ('pro', 12, 10000), ('PRO', 1, 1000);
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var plans = await new PlanStore(path).ListAsync();
+
+            Assert.That(plans, Is.EqualTo(new[]
+            {
+                new Plan("free", "Free", "", 64424509440, true, false, [], 0, 10, 20),
+                new Plan("personal", "Personal", "", 107374182400, true, true, [], 1, 10, 20),
+                new Plan("pro", "Pro", "Everything", 1099511627776, true, true, [new(1, 1000), new(12, 10000)], 3, 10, 20),
+            }), "every plan as it was, prices included");
+
+            await using var check = new SqliteConnection($"Data Source={path}");
+            await check.OpenAsync();
+            await using var tables = check.CreateCommand();
+            tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'plan_prices';";
+            Assert.That(Convert.ToInt64(await tables.ExecuteScalarAsync()), Is.Zero, "plan_prices is gone");
+        }
+        finally
+        {
+            TempDatabase.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task APlanIsKeptAsItsIdAndADocument()
     {
         var path = TempDatabase.NewPath();
