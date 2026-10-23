@@ -11,48 +11,17 @@ using Microsoft.Data.Sqlite;
 namespace Odin.InvitationCodes.Hosting;
 
 /// <summary>
-/// A plan an owner can buy on the upgrade page. Only <c>Id</c> is needed (a plan Id on the identity hosts); the
-/// name shown defaults to it. <c>Price</c> is accepted but not shown: there is no payment yet.
-/// </summary>
-public record PlanForSale
-{
-    public string Id { get; init; } = "";
-    public string Name { get; init; } = "";
-    public string Description { get; init; } = "";
-    public string Price { get; init; } = "";
-}
-
-/// <summary>
-/// The upgrade page's settings. Off (its routes answer 404) while <c>PlanService:PublicDomain</c> is empty.
+/// The upgrade page's settings. Off (its routes answer 404) while <c>PlanService:PublicDomain</c> is empty. The plans
+/// it sells are the plans marked for sale (<see cref="PlanStore"/>).
 /// </summary>
 public class UpgradeOptions
 {
     public const string CallbackPath = "/upgrade/youauth-callback";
 
-    public UpgradeOptions(string? publicDomain, string? displayName, IEnumerable<PlanForSale> plansForSale)
+    public UpgradeOptions(string? publicDomain, string? displayName)
     {
-        PlansForSale = plansForSale.Select(p => p with
-        {
-            Id = p.Id?.Trim() ?? "",
-            Name = string.IsNullOrWhiteSpace(p.Name) ? p.Id?.Trim() ?? "" : p.Name.Trim(),
-            Description = p.Description?.Trim() ?? "",
-            Price = p.Price?.Trim() ?? "",
-        }).ToList();
-        if (PlansForSale.Any(p => p.Id == ""))
-        {
-            throw new InvalidOperationException("PlanService:PlansForSale: every plan needs an Id");
-        }
-        if (PlansForSale.Select(p => p.Id.ToLowerInvariant()).Distinct().Count() != PlansForSale.Count)
-        {
-            throw new InvalidOperationException("PlanService:PlansForSale has a plan Id twice");
-        }
-
         if (string.IsNullOrWhiteSpace(publicDomain))
         {
-            if (PlansForSale.Count > 0)
-            {
-                throw new InvalidOperationException("PlanService:PublicDomain is not configured, but PlanService:PlansForSale is");
-            }
             PublicDomain = "";
         }
         else
@@ -70,19 +39,12 @@ public class UpgradeOptions
     /// <summary>What the service calls itself on the identity's consent screen (.well-known/youauth-client.json)</summary>
     public string DisplayName { get; }
 
-    public IReadOnlyList<PlanForSale> PlansForSale { get; }
-
     public bool Enabled => PublicDomain != "";
 
     public string CallbackUrl => $"https://{PublicDomain}{CallbackPath}";
 
-    public PlanForSale? ForSale(string? planId) =>
-        PlansForSale.FirstOrDefault(p => string.Equals(p.Id, planId?.Trim(), StringComparison.OrdinalIgnoreCase));
-
     public static UpgradeOptions FromConfiguration(IConfiguration configuration) =>
-        new(configuration["PlanService:PublicDomain"],
-            configuration["PlanService:DisplayName"],
-            configuration.GetSection("PlanService:PlansForSale").Get<PlanForSale[]>() ?? []);
+        new(configuration["PlanService:PublicDomain"], configuration["PlanService:DisplayName"]);
 }
 
 /// <summary>

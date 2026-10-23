@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Odin.InvitationCodes.Hosting.Tests;
 
@@ -12,9 +13,22 @@ namespace Odin.InvitationCodes.Hosting.Tests;
 /// </summary>
 /// <param name="requestsPerMinutePerIp">High by default, so only the rate-limit tests meet the limit</param>
 /// <param name="upgradePage">Whether the upgrade page is on (PlanService:PublicDomain set)</param>
-public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, bool upgradePage = true)
+/// <param name="seedPlans">Whether the database starts with <see cref="Plans"/>; without, it has no plans</param>
+public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, bool upgradePage = true,
+    bool seedPlans = true)
     : WebApplicationFactory<Program>
 {
+    /// <summary>The plans the database starts with: two for sale (registered, then veterans), three not</summary>
+    public static readonly PlanRequest[] Plans =
+    [
+        new("free", "Free", 64424509440, true),
+        new("pro-100gb", "Pro", 107374182400, true),
+        new("registered", "Registered", 10737418240, true, ForSale: true, SortOrder: 1),
+        new("veterans", "Veterans", 1099511627776, true, ForSale: true, Description: "For those who served",
+            Price: "$5 a month", SortOrder: 2),
+        new("tiny-test", "Tiny test", 1048576, false),
+    ];
+
     /// <summary>The identity hosts the service knows, faked: <see cref="IdentityHosts"/> answers for them</summary>
     public static readonly string[] Hosts = ["provisioning.one.example", "provisioning.two.example"];
 
@@ -34,6 +48,9 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
 
     public MovableTime Time { get; } = new();
 
+    /// <summary>The database file, for a test that puts in what the API would refuse, e.g. an older code</summary>
+    public string DatabasePath => _path;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Not Development: appsettings.Development.json would add its own plan service settings (the upgrade
@@ -52,12 +69,6 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
         {
             builder.UseSetting("PlanService:PublicDomain", PublicDomain);
             builder.UseSetting("PlanService:DisplayName", "Test Hosting");
-            builder.UseSetting("PlanService:PlansForSale:0:Id", "veterans");
-            builder.UseSetting("PlanService:PlansForSale:0:Name", "Veterans");
-            builder.UseSetting("PlanService:PlansForSale:0:Description", "1 TB and a public home page");
-            builder.UseSetting("PlanService:PlansForSale:0:Price", "$5 a month");
-            builder.UseSetting("PlanService:PlansForSale:1:Id", "registered");
-            builder.UseSetting("PlanService:PlansForSale:1:Name", "Registered");
         }
         builder.ConfigureServices(services =>
         {
@@ -66,6 +77,20 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Time);
         });
+    }
+
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = base.CreateHost(builder);
+        if (seedPlans)
+        {
+            var plans = host.Services.GetRequiredService<PlanStore>();
+            foreach (var plan in Plans)
+            {
+                plans.CreateAsync(plan).GetAwaiter().GetResult();
+            }
+        }
+        return host;
     }
 
     /// <summary>

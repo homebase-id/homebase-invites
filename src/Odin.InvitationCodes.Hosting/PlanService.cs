@@ -1,11 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 
 namespace Odin.InvitationCodes.Hosting;
 
 /// <summary>
 /// The identity hosts the service may set plans on: their provisioning domains, and the one plan key they all take
-/// (odin-core <c>Registry:PlanService:ApiKey</c>). A host not listed here is never called, whatever a request says.
+/// (odin-core <c>Registry:AccountService:ApiKey</c>). A host not listed here is never called, whatever a request says.
 /// </summary>
 public class PlanHosts
 {
@@ -37,12 +38,14 @@ public class PlanHosts
 /// <summary>
 /// Sets the plans grants owe on the identity hosts. Finds the host that serves an identity by asking the known
 /// hosts (the hint and the last host seen first), sets the plan there with the grant's reference, and keeps a grant
-/// pending, with backoff, until its host has it. The host API (odin-core, on the provisioning domain):
-/// <c>GET /api/plans/v1/identities/{identity}</c> and <c>PUT .../{identity}/plan {planId, reference}</c>, both 404
-/// for an identity the host does not serve.
+/// pending, with backoff, until its host has it. The host API (odin-core #1994, on the provisioning domain):
+/// <c>GET /api/plans/v1/identities/{identity}</c> answers <c>{domain, planId, quotaBytes, publicWebPresence}</c>, and
+/// <c>PUT .../{identity}/plan {planId, quotaBytes, publicWebPresence, reference}</c> sets them; values left out stay as
+/// they are. Both are 404 for an identity the host does not serve.
 /// </summary>
 public class PlanService(
     PlanGrantStore store,
+    PlanStore planStore,
     PlanHosts hosts,
     IHttpClientFactory httpClientFactory,
     TimeProvider time,
@@ -63,12 +66,20 @@ public class PlanService(
     //
 
     /// <summary>
-    /// Makes the grant (or finds the one with this reference) and tries to set it on its host straight away
+    /// Makes the grant (or finds the one with this reference) and tries to set it on its host straight away. The
+    /// grant records what the plan gives now; a plan that does not exist is refused.
     /// </summary>
     public async Task<PlanGrant> GrantAsync(string? identity, string? planId, string? source, string? reference,
         string? host)
     {
-        var (grant, created) = await store.CreateAsync(identity, planId, source, reference, host, Now);
+        if (string.IsNullOrWhiteSpace(planId))
+        {
+            throw new InvalidPlanGrantRequestException("planId is required");
+        }
+        var plan = await planStore.GetAsync(planId) ??
+                   throw new InvalidPlanGrantRequestException($"There is no plan '{planId.Trim()}'");
+
+        var (grant, created) = await store.CreateAsync(identity, plan, source, reference, host, Now);
         return created || grant.Status == PlanGrantStatus.Pending ? await ApplyAsync(grant) : grant;
     }
 
@@ -98,7 +109,8 @@ public class PlanService(
 
     /// <summary>
     /// Sets the grant's plan on the host that serves its identity. Applied when the host says so; failed when the
-    /// host refuses the plan (400: not one of its plans); otherwise pending, to try again later.
+    /// host refuses it (400: an empty plan Id or a quota that is not more than 0); otherwise pending, to try again
+    /// later.
     /// </summary>
     public async Task<PlanGrant> ApplyAsync(PlanGrant grant)
     {
@@ -157,8 +169,10 @@ public class PlanService(
     //
 
     /// <summary>
-    /// Re-sets the plan each identity's latest applied grant gave it, where its host says it has another: a plan
-    /// changed by hand, or lost. Returns the identities it corrected.
+    /// Re-sets the plan each identity's latest applied grant gave it, where its host says it has another plan Id,
+    /// quota or public web presence: changed by hand, or lost. Only what both sides have is compared: a grant from
+    /// before plans were kept here by its plan Id alone, and a host that does not say its quota or public web
+    /// presence (from before odin-core #1994) not on those. Returns the identities it corrected.
     /// </summary>
     public async Task<List<string>> ReconcileAsync()
     {
@@ -168,8 +182,9 @@ public class PlanService(
             await _applyLock.WaitAsync();
             try
             {
-                var located = await LocateAsync(grant.Identity, grant.Host);
-                if (located.Host == null || string.Equals(located.PlanId, grant.PlanId, StringComparison.OrdinalIgnoreCase))
+                var located = await LocateIdentityAsync(grant.Identity, grant.Host, skip: null);
+                var drift = located.Identity == null ? null : Drift(grant, located.Identity);
+                if (located.Host == null || drift == null)
                 {
                     continue;
                 }
@@ -179,8 +194,8 @@ public class PlanService(
                 {
                     await store.SetKnownHostAsync(grant.Identity, located.Host, Now);
                     corrected.Add(grant.Identity);
-                    logger.LogWarning("Reconcile: {identity} had plan {had} on {host}, set back to {planId} (grant {id})",
-                        grant.Identity, located.PlanId ?? "none", located.Host, grant.PlanId, grant.Id);
+                    logger.LogWarning("Reconcile: {identity} had {drift} on {host}, set back to plan {planId} (grant {id})",
+                        grant.Identity, drift, located.Host, grant.PlanId, grant.Id);
                 }
                 else
                 {
@@ -206,6 +221,14 @@ public class PlanService(
     public async Task<(string? Host, string? PlanId, string? Error)> LocateAsync(string identity, string? hint,
         string? skip = null)
     {
+        var located = await LocateIdentityAsync(identity, hint, skip);
+        return (located.Host, located.Identity?.PlanId, located.Error);
+    }
+
+    // As LocateAsync, with all the host said about the identity
+    private async Task<(string? Host, HostIdentity? Identity, string? Error)> LocateIdentityAsync(string identity,
+        string? hint, string? skip)
+    {
         if (hosts.Hosts.Count == 0)
         {
             return (null, null, "no identity hosts are configured (PlanService:Hosts)");
@@ -227,7 +250,7 @@ public class PlanService(
             var answer = await GetPlanAsync(host, identity);
             if (answer.Status == HttpStatusCode.OK)
             {
-                return (host, answer.PlanId, null);
+                return (host, answer.Identity, null);
             }
             if (answer.Status != HttpStatusCode.NotFound)
             {
@@ -252,7 +275,28 @@ public class PlanService(
         return (await store.MarkPendingAsync(grant.Id, error, Now + (long)wait.TotalMilliseconds, Now))!;
     }
 
-    private async Task<(HttpStatusCode? Status, string? PlanId, string? Error)> GetPlanAsync(string host, string identity)
+    // What differs between the grant and the identity on its host, e.g. "quota 1048576"; null when nothing does
+    private static string? Drift(PlanGrant grant, HostIdentity identity)
+    {
+        var drift = new List<string>();
+        if (!string.Equals(identity.PlanId, grant.PlanId, StringComparison.OrdinalIgnoreCase))
+        {
+            drift.Add($"plan {identity.PlanId ?? "none"}");
+        }
+        if (grant.QuotaBytes != null && identity.QuotaBytes != null && grant.QuotaBytes != identity.QuotaBytes)
+        {
+            drift.Add($"quota {identity.QuotaBytes}");
+        }
+        if (grant.PublicWebPresence != null && identity.PublicWebPresence != null &&
+            grant.PublicWebPresence != identity.PublicWebPresence)
+        {
+            drift.Add($"public web presence {identity.PublicWebPresence}");
+        }
+        return drift.Count == 0 ? null : string.Join(", ", drift);
+    }
+
+    private async Task<(HttpStatusCode? Status, HostIdentity? Identity, string? Error)> GetPlanAsync(string host,
+        string identity)
     {
         try
         {
@@ -264,7 +308,7 @@ public class PlanService(
                 return (response.StatusCode, null, await DescribeAsync(response));
             }
             var body = await response.Content.ReadFromJsonAsync<HostIdentity>();
-            return (HttpStatusCode.OK, body?.PlanId, null);
+            return (HttpStatusCode.OK, body ?? new HostIdentity(identity, null, null, null), null);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
@@ -278,7 +322,8 @@ public class PlanService(
         {
             using var request = new HttpRequestMessage(HttpMethod.Put, IdentityUrl(host, grant.Identity) + "/plan");
             request.Headers.Add(ApiKeyHeader, hosts.ApiKey);
-            request.Content = JsonContent.Create(new HostSetPlan(grant.PlanId, grant.Reference));
+            request.Content = JsonContent.Create(
+                new HostSetPlan(grant.PlanId, grant.QuotaBytes, grant.PublicWebPresence, grant.Reference));
             using var response = await Client().SendAsync(request);
             return (response.StatusCode, response.IsSuccessStatusCode ? null : await DescribeAsync(response));
         }
@@ -300,13 +345,19 @@ public class PlanService(
         return string.IsNullOrWhiteSpace(body) ? status : $"{status}: {(body.Length > 200 ? body[..200] : body)}";
     }
 
-    private record HostIdentity(string? Domain, string? PlanId);
+    // QuotaBytes and PublicWebPresence are null from hosts before odin-core #1994, which do not say them
+    private record HostIdentity(string? Domain, string? PlanId, long? QuotaBytes, bool? PublicWebPresence);
 
-    private record HostSetPlan(string PlanId, string Reference);
+    // A grant from before plans were kept here leaves out the quota and public web presence: the host keeps its own
+    private record HostSetPlan(
+        string PlanId,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? QuotaBytes,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? PublicWebPresence,
+        string Reference);
 }
 
 /// <summary>
-/// Tries pending grants as they fall due, and once a day sets back any applied plan a host no longer has
+/// Tries pending grants as they fall due, and once a day sets back any applied plan a host no longer has as granted
 /// </summary>
 public class PlanGrantWorker(PlanService plans, IConfiguration configuration, ILogger<PlanGrantWorker> logger)
     : BackgroundService

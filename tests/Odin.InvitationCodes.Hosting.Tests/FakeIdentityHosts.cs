@@ -6,33 +6,48 @@ using System.Text.Json;
 namespace Odin.InvitationCodes.Hosting.Tests;
 
 /// <summary>
-/// Identity hosts' plan API (odin-core, /api/plans/v1 on the provisioning domain), faked in memory: which host
-/// serves which identity on which plan, what each host answers instead, and every request made.
+/// Identity hosts' plan API (odin-core #1994, /api/plans/v1 on the provisioning domain), faked in memory: which host
+/// serves which identity with which plan, quota and public web presence, what each host answers instead, and every
+/// request made.
 /// </summary>
 public sealed class FakeIdentityHosts : HttpMessageHandler
 {
     public const string PlanKey = "test-plan-key";
 
-    // host -> identity -> plan id
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string?>> _identities = new();
+    /// <summary>odin-core's HostingProvider:DefaultQuotaBytes: the quota of an identity with none stored</summary>
+    public const long DefaultQuotaBytes = 64424509440;
 
-    /// <summary>Plans each host has; null means any</summary>
-    public ConcurrentDictionary<string, HashSet<string>> PlansOnHost { get; } = new();
+    /// <summary>What a host has for an identity. QuotaBytes is the quota in effect, as the host reports it.</summary>
+    public record Identity(string? PlanId, long QuotaBytes = DefaultQuotaBytes, bool PublicWebPresence = true);
+
+    // host -> identity -> what it has
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Identity>> _identities = new();
 
     /// <summary>A status a host answers everything with instead, e.g. 503 while it is down</summary>
     public ConcurrentDictionary<string, HttpStatusCode> Broken { get; } = new();
 
+    /// <summary>Hosts that refuse to set any plan (400), as odin-core does for an empty plan or a bad quota</summary>
+    public ConcurrentDictionary<string, string> RefusesPlans { get; } = new();
+
+    /// <summary>Hosts from before odin-core #1994: they answer only {domain, planId} and ignore what plans give</summary>
+    public HashSet<string> Old { get; } = [];
+
     public ConcurrentQueue<(string Method, string Host, string Path, string? Body)> Requests { get; } = new();
 
-    public void Serve(string host, string identity, string? planId = "free") =>
-        _identities.GetOrAdd(host, _ => new())[identity] = planId;
+    public void Serve(string host, string identity, string? planId = "free", long quotaBytes = DefaultQuotaBytes,
+        bool publicWebPresence = true) =>
+        _identities.GetOrAdd(host, _ => new())[identity] = new Identity(planId, quotaBytes, publicWebPresence);
 
     public void Forget(string host, string identity) => _identities.GetOrAdd(host, _ => new()).TryRemove(identity, out _);
 
-    public string? PlanOn(string host, string identity) =>
-        _identities.TryGetValue(host, out var identities) && identities.TryGetValue(identity, out var plan) ? plan : null;
+    public Identity? On(string host, string identity) =>
+        _identities.TryGetValue(host, out var identities) && identities.TryGetValue(identity, out var has) ? has : null;
+
+    public string? PlanOn(string host, string identity) => On(host, identity)?.PlanId;
 
     public List<string> HostsAsked() => Requests.Select(r => r.Host).ToList();
+
+    public JsonElement LastPut() => JsonDocument.Parse(Requests.Last(r => r.Method == "PUT").Body!).RootElement;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -59,23 +74,38 @@ public sealed class FakeIdentityHosts : HttpMessageHandler
         var setting = rest.EndsWith("/plan");
         var identity = setting ? rest[..^"/plan".Length] : rest;
 
-        if (!_identities.TryGetValue(host, out var identities) || !identities.ContainsKey(identity))
+        if (!_identities.TryGetValue(host, out var identities) || !identities.TryGetValue(identity, out var has))
         {
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }
 
         if (setting && request.Method == HttpMethod.Put)
         {
-            var planId = JsonDocument.Parse(body!).RootElement.GetProperty("planId").GetString()!;
-            if (PlansOnHost.TryGetValue(host, out var plans) && !plans.Contains(planId))
+            if (RefusesPlans.TryGetValue(host, out var refusal))
             {
-                return new HttpResponseMessage(HttpStatusCode.BadRequest)
-                    { Content = new StringContent($"'{planId}' is not a plan in Registry:Plans") };
+                return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent(refusal) };
             }
-            identities[identity] = planId;
+
+            // Values left out keep what the identity has
+            var set = JsonDocument.Parse(body!).RootElement;
+            has = has with { PlanId = set.GetProperty("planId").GetString() };
+            if (!Old.Contains(host))
+            {
+                if (set.TryGetProperty("quotaBytes", out var quota))
+                {
+                    has = has with { QuotaBytes = quota.GetInt64() };
+                }
+                if (set.TryGetProperty("publicWebPresence", out var publicWebPresence))
+                {
+                    has = has with { PublicWebPresence = publicWebPresence.GetBoolean() };
+                }
+            }
+            identities[identity] = has;
         }
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = JsonContent.Create(new { domain = identity, planId = identities[identity] }) };
+        object answer = Old.Contains(host)
+            ? new { domain = identity, planId = has.PlanId }
+            : new { domain = identity, planId = has.PlanId, quotaBytes = has.QuotaBytes, publicWebPresence = has.PublicWebPresence };
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(answer) };
     }
 }

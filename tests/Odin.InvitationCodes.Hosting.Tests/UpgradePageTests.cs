@@ -73,10 +73,38 @@ public class UpgradePageTests
         var page = await SignInAsync();
 
         Assert.That(page, Does.Contain($"Signed in as <strong>{Frodo}</strong>"));
-        Assert.That(page, Does.Contain("Your plan: <strong>free</strong>"), "free is not for sale, so it is named above the cards");
+        Assert.That(page, Does.Contain("Your plan: <strong>Free</strong>"),
+            "free is not for sale, so it is named above the cards, by its name");
         Assert.That(page, Does.Contain("Choose Veterans"));
         Assert.That(page, Does.Contain("Choose Registered"));
-        Assert.That(page, Does.Not.Contain("$5 a month"), "no prices");
+        Assert.That(page.IndexOf("Choose Registered"), Is.LessThan(page.IndexOf("Choose Veterans")), "in sort order");
+        Assert.That(page, Does.Not.Contain("<h2>Pro</h2>").And.Not.Contain("<h2>Tiny test</h2>"),
+            "only the plans for sale are cards");
+    }
+
+    [Test]
+    public async Task TheCardsSayWhatEachPlanGives()
+    {
+        var page = await SignInAsync();
+
+        var cards = page.Split("<li class=\"card")[1..];
+        Assert.That(cards, Has.Length.EqualTo(2));
+        Assert.That(cards[0], Does.Contain("<h2>Registered</h2>").And.Contain("10 GB of storage")
+            .And.Contain("A public home page").And.Not.Contain("class=\"price\""));
+        Assert.That(cards[1], Does.Contain("<h2>Veterans</h2>").And.Contain("For those who served")
+            .And.Contain("1 TB of storage").And.Contain("<p class=\"price\">$5 a month</p>"));
+    }
+
+    [Test]
+    public async Task APlanTakenOffSaleLeavesTheCards()
+    {
+        await SetForSaleAsync("registered", false);
+
+        var page = await SignInAsync();
+
+        Assert.That(page, Does.Not.Contain("Choose Registered"));
+        Assert.That((await _browser.GetAsync("/upgrade/confirm?plan=registered")).StatusCode,
+            Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
     [Test]
@@ -102,7 +130,7 @@ public class UpgradePageTests
         var html = await response.Content.ReadAsStringAsync();
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-        Assert.That(html, Does.Contain("Change your plan from <strong>free</strong> to"));
+        Assert.That(html, Does.Contain("Change your plan from <strong>Free</strong> to"));
         Assert.That(html, Does.Contain("<h2>Veterans</h2>"));
         Assert.That(html, Does.Contain("/upgrade/checkout?plan=veterans"));
     }
@@ -217,7 +245,8 @@ public class UpgradePageTests
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Redirect));
         Assert.That(response.Headers.Location!.ToString(), Does.StartWith("/upgrade/done?grant="));
-        Assert.That(_server.IdentityHosts.PlanOn(InvitationCodeServer.Hosts[0], Frodo), Is.EqualTo("veterans"));
+        Assert.That(_server.IdentityHosts.On(InvitationCodeServer.Hosts[0], Frodo),
+            Is.EqualTo(new FakeIdentityHosts.Identity("veterans", 1099511627776, true)), "the plan and what it gives");
 
         using var admin = _server.ClientWithKey(InvitationCodeServer.CreateKey);
         var grantsJson = await admin.GetStringAsync($"/api/v1/plans/grants?identity={Frodo}");
@@ -232,6 +261,20 @@ public class UpgradePageTests
         Assert.That(done.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(html, Does.Contain("You&#x27;re on Veterans").Or.Contain("You're on Veterans"));
         Assert.That(html, Does.Contain($"href=\"https://{Frodo}/owner/settings/plan\""), "back to the identity's plan page");
+    }
+
+    [Test]
+    public async Task TheDonePageNamesAPlanNoLongerForSale()
+    {
+        await SignInAsync();
+        var checkout = await (await _browser.GetAsync("/upgrade/checkout?plan=veterans")).Content.ReadAsStringAsync();
+        var bought = await PostFormAsync("/upgrade/checkout", checkout, ("planId", "veterans"));
+        await SetForSaleAsync("veterans", false);
+
+        var html = await (await _browser.GetAsync(bought.Headers.Location!.ToString())).Content.ReadAsStringAsync();
+
+        Assert.That(html, Does.Contain("You&#x27;re on Veterans").Or.Contain("You're on Veterans"));
+        Assert.That(html, Does.Contain("1 TB of storage"));
     }
 
     [Test]
@@ -312,6 +355,13 @@ public class UpgradePageTests
     }
 
     //
+
+    private async Task SetForSaleAsync(string planId, bool forSale)
+    {
+        using var admin = _server.ClientWithKey(InvitationCodeServer.CreateKey);
+        var response = await admin.PatchAsJsonAsync($"/api/v1/plans/{planId}", new { forSale });
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+    }
 
     // Opens the page for Frodo, plays the identity (signed in, consenting), and returns the callback URL it sends
     // the browser back to

@@ -14,6 +14,7 @@ CONFIG="$HOME/.homebase-invites"
 [[ -f "$CONFIG" ]] && source "$CONFIG"
 URL="${HOMEBASE_INVITES_URL:-https://invites.ravenhosting.cloud}"
 API="$URL/api/v1/invitation-codes"
+PLANS="$URL/api/v1/plans"
 GRANTS="$URL/api/v1/plans/grants"
 
 usage() {
@@ -32,6 +33,38 @@ CHECK THE SERVICE
   ping
       Prints "pong" if the service is up.
 
+HOSTING PLANS  (create key)
+  A plan is what an identity gets: a quota and whether it has a public home page. The identity
+  hosts have no plans of their own; this service sends what a plan gives whenever it gives one.
+  There are no built-in plans: create them before making codes for them.
+
+  plans [--json]
+      Lists the plans as a table: id, name, storage, public page, for sale, price and sort order.
+        --json              print the service's JSON instead of the table (the table needs jq)
+
+  plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false
+              [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]
+      Makes a new plan and prints it.
+        --id <plan id>                 required: letters, digits, '.', '_' and '-', e.g. veterans.
+                                       Any case finds it; it cannot be changed later
+        --name <text>                  required: what owners see, e.g. "Veterans"
+        --quota-bytes <n>              required: bytes it may store, more than 0, e.g. 1099511627776
+                                       for 1 TB. There is no unlimited
+        --public-web-presence true|false   required: whether it has a public home page
+        --for-sale true|false          optional, false by default: whether owners can buy it on
+                                       the upgrade page
+        --price <text>                 optional: shown to buyers, e.g. "\$5 a month"
+        --sort-order <n>               optional, 0 by default: plans are listed by it, then by id
+        --description <text>           optional: a line shown on its card
+
+  plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false]
+            [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]
+      Changes only what you give. Identities already on the plan keep what they were given; the
+      change applies to the next signup or purchase. To retire a plan, use --for-sale false.
+
+  plan-delete <plan id>
+      Deletes a plan no code or grant uses. [409] means one does: mark it not for sale instead.
+
 CREATE AND LIST CODES  (create key)
   create --uses <n> --source <text> --plan <plan id> [--owner <identity>]
       Makes a new code and prints it.
@@ -40,8 +73,8 @@ CREATE AND LIST CODES  (create key)
                                e.g. --source "spring campaign"
         --owner <identity>     optional: the identity the code belongs to, e.g. frodo.demo.rocks
         --plan <plan id>       required: the hosting plan people who sign up with this code get,
-                               e.g. --plan pro-100gb. The plan, defined on the identity hosts,
-                               decides their quota and whether they get a public home page.
+                               e.g. --plan registered. It must be one of the plans (see plans);
+                               it decides their quota and whether they get a public home page.
 
   list [--owner <identity>] [--json]
       Lists codes as a table: plan, uses left of uses allowed, owner, source, and whether each is
@@ -66,7 +99,8 @@ CHANGE A CODE  (create key)
         --source <text>     new note on where the code came from
         --owner <identity>  give the code to this identity
         --no-owner          take the code away from its owner
-        --plan <plan id>    people who sign up with it from now on get this hosting plan
+        --plan <plan id>    people who sign up with it from now on get this hosting plan; it
+                            must be one of the plans
 
   disable <code>
       Stops the code working, whatever uses it has left. Nothing else changes.
@@ -78,18 +112,20 @@ GRANT A PLAN  (create key)
       Owes an identity a plan and sets it on the identity host that serves it, straight away. If no
       host can take it yet, the grant stays pending and the service keeps trying.
         --id <identity>        required: e.g. frodo.demo.rocks
-        --plan <plan id>       required: a plan the identity hosts have, e.g. veterans
+        --plan <plan id>       required: one of the plans, e.g. veterans. The grant keeps what the
+                               plan gives now and sets all of it on the host
         --host <domain>        optional: the provisioning domain of the identity's host, tried
                                first; only hosts the service knows are ever called
         --reference <ref>      optional: your id for it; the same reference twice is one grant
 
   grants [--id <identity>] [--status pending|applied|failed] [--json]
       Lists grants, newest first, as a table: id, identity, plan, status, host, attempts and the
-      last error. "failed" means the host refused the plan; "pending" is retried by itself.
+      last error. "failed" means the host refused the plan (an empty plan id or a quota that is
+      not more than 0); "pending" is retried by itself.
         --json              print the service's JSON instead of the table (the table needs jq)
 
   retry <grant id>
-      Tries a pending or failed grant again now, e.g. after the plan was added to the host.
+      Tries a pending or failed grant again now, e.g. once the identity is on a host.
 
 TEST A CODE  (signup key; odin-core does these during a real signup)
   validate <code>
@@ -100,19 +136,26 @@ TEST A CODE  (signup key; odin-core does these during a real signup)
       Gives back the code's most recent use.
 
 EXAMPLES
+  ./invites.sh plan-create --id veterans --name Veterans --quota-bytes 1099511627776
+                          --public-web-presence true --for-sale true --price "\$5 a month"
+      a 1 TB plan with a public home page, for sale on the upgrade page
+
+  ./invites.sh plan-edit veterans --for-sale false
+      stop selling it; identities on it keep it
+
   ./invites.sh create --uses 5 --source "spring campaign" --plan free --owner frodo.demo.rocks
       5 signups on the free plan, owned by frodo
 
-  ./invites.sh create --uses 10 --source "conference booth" --plan pro-100gb
-      10 signups on the pro-100gb plan, no owner
+  ./invites.sh create --uses 10 --source "conference booth" --plan registered
+      10 signups on the registered plan, no owner
 
   ./invites.sh list --owner frodo.demo.rocks
 
   ./invites.sh stats --since 30
       signups in the last 30 days, by source, owner, plan and week
 
-  ./invites.sh edit K7QX-M2PD-9FHW --uses 20 --plan pro-100gb
-      allow 20 signups in total, on the pro-100gb plan from now on
+  ./invites.sh edit K7QX-M2PD-9FHW --uses 20 --plan veterans
+      allow 20 signups in total, on the veterans plan from now on
 
   ./invites.sh disable K7QX-M2PD-9FHW
   ./invites.sh validate K7QX-M2PD-9FHW
@@ -123,8 +166,9 @@ EXAMPLES
   ./invites.sh grants --status pending
 
 Every command prints the service's answer and the HTTP status, e.g. [200]. [401] means a wrong or
-missing key; [400] means bad input, and the message says what; [404] on edit means no such code;
-[409] on grant means the reference is another grant's, on retry that the grant is already applied.
+missing key; [400] means bad input, and the message says what; [404] on edit means no such code
+or plan; [409] on plan-create means the id is taken, on plan-delete that the plan is in use, on
+grant that the reference is another grant's, on retry that the grant is already applied.
 EOF
 }
 
@@ -133,6 +177,32 @@ die() { printf '%s\n' "$@" >&2; exit 1; }
 need() { [[ -n "${!1:-}" ]] || die "$1 is not set; run ./invites.sh setup"; }
 
 check_uses() { [[ "$1" =~ ^[0-9]+$ ]] || die "--uses must be a number, e.g. --uses 5"; }
+
+# A plan id for use in the URL
+check_plan_id() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "$2"; }
+
+plan_fields() { # usage [option value]...; the plan options as JSON fields, in the array fields
+  local usage="$1"; shift
+  fields=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name|--description|--price)
+        [[ $# -ge 2 ]] || die "$usage"
+        fields+=("\"${1#--}\":$(json_string "$2")"); shift 2 ;;
+      --quota-bytes)
+        [[ "${2:-}" =~ ^[0-9]+$ ]] || die "--quota-bytes must be a number of bytes, e.g. --quota-bytes 1099511627776"
+        fields+=("\"quotaBytes\":$2"); shift 2 ;;
+      --sort-order)
+        [[ "${2:-}" =~ ^-?[0-9]+$ ]] || die "--sort-order must be a whole number, e.g. --sort-order 1"
+        fields+=("\"sortOrder\":$2"); shift 2 ;;
+      --public-web-presence|--for-sale)
+        [[ "${2:-}" =~ ^(true|false)$ ]] || die "$1 must be true or false"
+        name=publicWebPresence; [[ "$1" == --for-sale ]] && name=forSale
+        fields+=("\"$name\":$2"); shift 2 ;;
+      *) die "unknown option: $1" "$usage" ;;
+    esac
+  done
+}
 
 # A JSON string, quotes included
 json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
@@ -169,7 +239,7 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  create|list|stats|edit|disable|enable|grant|grants|retry) need HOMEBASE_INVITES_CREATE_KEY; key="$HOMEBASE_INVITES_CREATE_KEY" ;;
+  plans|plan-create|plan-edit|plan-delete|create|list|stats|edit|disable|enable|grant|grants|retry) need HOMEBASE_INVITES_CREATE_KEY; key="$HOMEBASE_INVITES_CREATE_KEY" ;;
   validate|use|undo) need HOMEBASE_INVITES_SIGNUP_KEY; key="$HOMEBASE_INVITES_SIGNUP_KEY" ;;
 esac
 
@@ -183,6 +253,53 @@ case "$cmd" in
     ;;
   ping)
     curl -sS -w '\n[%{http_code}]\n' "$URL/ping"
+    ;;
+  plans)
+    [[ "${1:-}" == "--json" || -z "${1:-}" ]] || die "usage: ./invites.sh plans [--json]"
+    as_json=false; [[ "${1:-}" == "--json" ]] && as_json=true
+    base="$PLANS" render "$as_json" "/" '
+      def pad(n): . + (" " * ([n - length, 0] | max));
+      def clip(n): if length > n then .[0:n - 3] + "..." else . end;
+      . as $plans
+      | ["ID", "NAME", "STORAGE", "PUBLIC PAGE", "FOR SALE", "PRICE", "ORDER"] as $head
+      | [$plans[] | [.id, (.name | clip(30)), .storage, (if .publicWebPresence then "yes" else "no" end),
+                     (if .forSale then "yes" else "no" end), (if .price == "" then "-" else .price | clip(30) end),
+                     "\(.sortOrder)"]] as $rows
+      | ([$head] + $rows) as $table
+      | [range(0; $head | length) as $i | [$table[][$i] | length] | max] as $widths
+      | if ($rows | length) == 0 then "(no plans; make one with ./invites.sh plan-create)"
+        else ($table[] | [range(0; length) as $i | .[$i] | pad($widths[$i])] | join("  ") | sub(" +$"; ""))
+        end'
+    ;;
+  plan-create)
+    plan_create_usage="usage: ./invites.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]  (see ./invites.sh help)"
+    plan_id=""; rest=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --id) [[ -n "${2:-}" ]] || die "$plan_create_usage"
+              plan_id="$2"; shift 2 ;;
+        *) rest+=("$1"); shift ;;
+      esac
+    done
+    plan_fields "$plan_create_usage" ${rest[@]+"${rest[@]}"}
+    joined=" ${fields[*]-} "
+    [[ -n "$plan_id" && "$joined" == *'"name":'* && "$joined" == *'"quotaBytes":'* &&
+       "$joined" == *'"publicWebPresence":'* ]] || die "$plan_create_usage"
+    fields+=("\"id\":$(json_string "$plan_id")")
+    base="$PLANS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  plan-edit)
+    plan_edit_usage="usage: ./invites.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--for-sale true|false] [--price <text>] [--sort-order <n>] [--description <text>]"
+    plan_id="${1:-}"
+    check_plan_id "$plan_id" "$plan_edit_usage"
+    shift
+    plan_fields "$plan_edit_usage" "$@"
+    [[ ${#fields[@]} -gt 0 ]] || die "nothing to change" "$plan_edit_usage"
+    base="$PLANS" call PATCH "/$plan_id" "{$(IFS=,; echo "${fields[*]}")}"
+    ;;
+  plan-delete)
+    check_plan_id "${1:-}" "usage: ./invites.sh plan-delete <plan id>"
+    base="$PLANS" call DELETE "/$1"
     ;;
   create)
     create_usage="usage: ./invites.sh create --uses <n> --source <text> --plan <plan id> [--owner <identity>]  (see ./invites.sh help)"
