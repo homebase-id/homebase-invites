@@ -36,7 +36,7 @@ the service on a real port. The script tests need `jq`: without it they are skip
 `.github/workflows/build-and-deploy.yml` (run by hand) builds, tests and pushes
 `ghcr.io/homebase-id/raven-hosting-internal:<branch>`, then asks the ansible controller to deploy it
 (`deploy raven-hosting aux raven-hosting-internal <tag>`) to blackbird-aux, behind Caddy at
-https://ravenhosting.cloud (the site) and https://invites.ravenhosting.cloud (the APIs), the same way homebase-social-sync deploys. The controller only deploys what the
+https://ravenhosting.cloud (the site and the APIs), the same way homebase-social-sync deploys. The controller only deploys what the
 DevOps repo allowlists (`odin-deploy.sh`, `run-playbook.sh`), so that has to be set up first.
 
 The container listens on 8080 and keeps its database in `/data`: mount a volume there.
