@@ -397,7 +397,7 @@ public static class AdminPages
         admin.MapGet("/renewals", async (HttpContext context, string? within, PlanGrantStore grants, AddOnStore addOns,
             PlanStore plans, TimeProvider time) =>
         {
-            within = RenewalsWithin.Contains(within) ? within : "30";
+            within = within is { } chosen && RenewalsWithin.Contains(chosen) ? chosen : "30";
             return await Show<AdminRenewals>(context, new
             {
                 Rows = await RenewalsAsync(within, grants, addOns, plans, time),
@@ -409,7 +409,7 @@ public static class AdminPages
         admin.MapGet("/renewals.csv", async (HttpContext context, string? within, PlanGrantStore grants,
             AddOnStore addOns, PlanStore plans, TimeProvider time) =>
         {
-            within = RenewalsWithin.Contains(within) ? within : "30";
+            within = within is { } chosen && RenewalsWithin.Contains(chosen) ? chosen : "30";
             var csv = new System.Text.StringBuilder("identity,plan,paid,term_months,bought,until,days_left,state\n");
             foreach (var row in await RenewalsAsync(within, grants, addOns, plans, time))
             {
