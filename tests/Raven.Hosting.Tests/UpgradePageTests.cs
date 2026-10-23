@@ -80,7 +80,7 @@ public class UpgradePageTests
     {
         var page = await SignInAsync();
 
-        Assert.That(page, Does.Contain($"Signed in as <strong>{Frodo}</strong>"));
+        Assert.That(page, Does.Contain($"<span class=\"identity\">{Frodo}</span>"), "who is signed in, in the header");
         Assert.That(page, Does.Contain("Your plan now").And.Contain("<h2 id=\"now-heading\">Free</h2>"),
             "free is not for sale, so it is named above the cards, by its name");
         Assert.That(page, Does.Contain("Choose Veterans"));

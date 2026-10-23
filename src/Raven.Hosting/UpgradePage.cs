@@ -154,8 +154,6 @@ public static class UpgradePage
                 }
                 return Show<ChoosePage>(new
                 {
-                    Identity = located.SignedIn!.Identity,
-                    Name = located.SignedIn.Name,
                     Now = located.Now,
                     CurrentPlanName = await PlanNameAsync(planStore, located.PlanId),
                     Plans = (await planStore.ListAsync()).Where(IsForSale).ToList(),
