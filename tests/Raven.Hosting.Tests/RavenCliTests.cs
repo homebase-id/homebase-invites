@@ -38,7 +38,7 @@ public class RavenCliTests
     [SetUp]
     public void SetUp()
     {
-        // A home of its own, so a real ~/.raven-hosting or ~/.homebase-invites is never read
+        // A home of its own, so a real ~/.raven-hosting is never read
         _home = Directory.CreateTempSubdirectory("raven-cli-").FullName;
     }
 
@@ -97,30 +97,6 @@ public class RavenCliTests
         var result = await RunAsync(new Options(WithKeys: false), "list", "--json");
 
         Assert.That(result.Status, Is.EqualTo(200), result.Output);
-    }
-
-    [Test]
-    public async Task TheKeysFromBeforeTheRenameStillWork()
-    {
-        var fromEnvironment = await RunAsync(new Options(WithKeys: false, OldKeys: true), "list", "--json");
-        Assert.That(fromEnvironment.Status, Is.EqualTo(200), fromEnvironment.Output + fromEnvironment.Error);
-
-        await File.WriteAllTextAsync(Path.Combine(_home, ".homebase-invites"),
-            $"HOMEBASE_INVITES_CREATE_KEY={InvitationCodeServer.CreateKey}\n");
-        var fromOldFile = await RunAsync(new Options(WithKeys: false), "list", "--json");
-        Assert.That(fromOldFile.Status, Is.EqualTo(200), fromOldFile.Output + fromOldFile.Error);
-    }
-
-    [Test]
-    public async Task TheNewKeysFileWinsOverTheOldOne()
-    {
-        await File.WriteAllTextAsync(Path.Combine(_home, ".homebase-invites"), "HOMEBASE_INVITES_CREATE_KEY=old-wrong-key\n");
-        await File.WriteAllTextAsync(Path.Combine(_home, ".raven-hosting"),
-            $"RAVEN_HOSTING_CREATE_KEY={InvitationCodeServer.CreateKey}\n");
-
-        var result = await RunAsync(new Options(WithKeys: false), "list", "--json");
-
-        Assert.That(result.Status, Is.EqualTo(200), result.Output + result.Error);
     }
 
     [Test]
@@ -531,8 +507,7 @@ public class RavenCliTests
     /// <param name="WithKeys">Pass the right keys in the environment</param>
     /// <param name="Stdin">What to type</param>
     /// <param name="CreateKey">A create key of its own, instead of the right one</param>
-    /// <param name="OldKeys">Pass the right keys under their names from before the rename (HOMEBASE_INVITES_*)</param>
-    private record Options(bool WithKeys = true, string? Stdin = null, string? CreateKey = null, bool OldKeys = false);
+    private record Options(bool WithKeys = true, string? Stdin = null, string? CreateKey = null);
 
     private Task<CliResult> RunAsync(params string[] arguments) => RunAsync(new Options(), arguments);
 
@@ -551,18 +526,9 @@ public class RavenCliTests
         }
 
         start.Environment["HOME"] = _home;
-        foreach (var prefix in new[] { "RAVEN_HOSTING_", "HOMEBASE_INVITES_" })
-        {
-            start.Environment.Remove(prefix + "CREATE_KEY");
-            start.Environment.Remove(prefix + "SIGNUP_KEY");
-            start.Environment.Remove(prefix + "URL");
-        }
         start.Environment["RAVEN_HOSTING_URL"] = _url;
-        if (options.OldKeys)
-        {
-            start.Environment["HOMEBASE_INVITES_CREATE_KEY"] = InvitationCodeServer.CreateKey;
-            start.Environment["HOMEBASE_INVITES_SIGNUP_KEY"] = InvitationCodeServer.SignupKey;
-        }
+        start.Environment.Remove("RAVEN_HOSTING_CREATE_KEY");
+        start.Environment.Remove("RAVEN_HOSTING_SIGNUP_KEY");
         if (options.WithKeys)
         {
             start.Environment["RAVEN_HOSTING_CREATE_KEY"] = InvitationCodeServer.CreateKey;

@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.HttpOverrides;
 using Raven.Hosting;
 
-// Raven Hosting's service (homebase-invites before the rename). It holds the invitation codes (#1908) and counts
+// Raven Hosting's service. It holds the invitation codes (#1908) and counts
 // their uses: the identity hosts call it with the signup key to check and use a code at signup; admins call it with
 // the create key to create and list.
 // It holds the hosting plans, which admins manage with the create key (README, "Plans"), and grants them: it sets
@@ -16,9 +16,6 @@ using Raven.Hosting;
 // "Upgrade page").
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Settings under their names from before the rename still work (README, "Configuration")
-var renamedSettingsUsed = RenamedSettings.Apply(builder.Configuration);
 
 var databasePath = Required("RavenHosting:DatabasePath");
 var signupApiKey = Required("RavenHosting:SignupApiKey");
@@ -43,8 +40,7 @@ builder.Services.AddHttpClient(PlanService.HttpClientName, client => client.Time
 var loginStore = new YouAuthLoginStore(databasePath);
 builder.Services.AddSingleton(loginStore);
 builder.Services.AddSingleton(UpgradeOptions.FromConfiguration(builder.Configuration));
-// The name from before the rename: the keys in the database were made under it, and another would not read them
-builder.Services.AddDataProtection().SetApplicationName("homebase-invites");
+builder.Services.AddDataProtection().SetApplicationName("raven-hosting");
 builder.Services.Configure<KeyManagementOptions>(options => options.XmlRepository = loginStore);
 builder.Services.AddSingleton<YouAuthLogin>();
 builder.Services.AddSingleton<UpgradeSession>();
@@ -79,12 +75,6 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
-
-if (renamedSettingsUsed.Count > 0)
-{
-    app.Logger.LogWarning("Settings under their names from before the rename: {settings}. Rename them " +
-                          "(README, Configuration)", string.Join(", ", renamedSettingsUsed));
-}
 
 app.UseForwardedHeaders();
 app.UseRateLimiter();

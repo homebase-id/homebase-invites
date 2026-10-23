@@ -14,9 +14,8 @@ namespace Raven.Hosting.Tests;
 /// <param name="requestsPerMinutePerIp">High by default, so only the rate-limit tests meet the limit</param>
 /// <param name="upgradePage">Whether the upgrade page is on (RavenHosting:PublicDomain set)</param>
 /// <param name="seedPlans">Whether the database starts with <see cref="Plans"/>; without, it has no plans</param>
-/// <param name="oldSettingNames">Configure it with the setting names from before the rename</param>
 public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, bool upgradePage = true,
-    bool seedPlans = true, bool oldSettingNames = false)
+    bool seedPlans = true)
     : WebApplicationFactory<Program>
 {
     /// <summary>The plans the database starts with: two for sale (registered, then veterans), three not</summary>
@@ -57,19 +56,19 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
         // Not Development: appsettings.Development.json would add its own plan service settings (the upgrade
         // page on, a host list), and every setting a test needs is set here
         builder.UseEnvironment("Test");
-        Set(builder, "RavenHosting:DatabasePath", _path);
-        Set(builder, "RavenHosting:SignupApiKey", SignupKey);
-        Set(builder, "RavenHosting:CreateApiKey", CreateKey);
-        Set(builder, "RavenHosting:RequestsPerMinutePerIp", requestsPerMinutePerIp.ToString());
+        builder.UseSetting("RavenHosting:DatabasePath", _path);
+        builder.UseSetting("RavenHosting:SignupApiKey", SignupKey);
+        builder.UseSetting("RavenHosting:CreateApiKey", CreateKey);
+        builder.UseSetting("RavenHosting:RequestsPerMinutePerIp", requestsPerMinutePerIp.ToString());
         for (var i = 0; i < Hosts.Length; i++)
         {
-            Set(builder, $"RavenHosting:IdentityHosts:{i}", Hosts[i]);
+            builder.UseSetting($"RavenHosting:IdentityHosts:{i}", Hosts[i]);
         }
-        Set(builder, "RavenHosting:AccountServiceApiKey", FakeIdentityHosts.PlanKey);
+        builder.UseSetting("RavenHosting:AccountServiceApiKey", FakeIdentityHosts.PlanKey);
         if (upgradePage)
         {
-            Set(builder, "RavenHosting:PublicDomain", PublicDomain);
-            Set(builder, "RavenHosting:DisplayName", "Test Hosting");
+            builder.UseSetting("RavenHosting:PublicDomain", PublicDomain);
+            builder.UseSetting("RavenHosting:DisplayName", "Test Hosting");
         }
         builder.ConfigureServices(services =>
         {
@@ -78,17 +77,6 @@ public sealed class InvitationCodeServer(int requestsPerMinutePerIp = 100_000, b
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Time);
         });
-    }
-
-    // Under the setting's name from before the rename, when the server is to use those
-    private void Set(IWebHostBuilder builder, string key, string value)
-    {
-        if (oldSettingNames)
-        {
-            var (name, old) = RenamedSettings.Renamed.Single(r => key == r.Key || key.StartsWith(r.Key + ":"));
-            key = old + key[name.Length..];
-        }
-        builder.UseSetting(key, value);
     }
 
     protected override IHost CreateHost(IHostBuilder builder)

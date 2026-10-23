@@ -1,8 +1,7 @@
 # raven-hosting
 
 Raven Hosting's service for Homebase identities: invitation codes for signups, the hosting plans, plan grants,
-and the upgrade page where owners get a bigger plan. It was homebase-invites before the rename: see
-[Renamed](#renamed) for what changed and what still works under the old names.
+and the upgrade page where owners get a bigger plan.
 
 The identity hosts (odin-core) call it at signup to check a code and take a use; who signed up with a code
 is kept on the new identity's registration, not here. The hosts have no plans of their own (odin-core #1994):
@@ -253,8 +252,6 @@ Security:
 | `RavenHosting__PublicDomain` | optional; the service's own public domain, e.g. `invites.ravenhosting.cloud`: its YouAuth client id and where `/upgrade` is. None: the upgrade page is off (404) |
 | `RavenHosting__DisplayName` | optional; what the identity's consent screen calls the service. Defaults to the public domain |
 
-Each key also works under its name from before the rename (see [Renamed](#renamed)).
-
 SQLite means **one instance**, and the database file should be backed up.
 
 Against junk traffic: a request without the right key is refused before its body is read, a body over 4 KB
@@ -265,46 +262,6 @@ by a firewall or a CDN.
 Keys are 32 random bytes, base64url: `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`. Give the
 signup key to Homebase-run identity hosts only (`Registry__InvitationCodeService__ApiKey` in odin-core),
 never to self-hosted servers.
-
-## Renamed
-
-This was homebase-invites. The rename changed:
-
-| Before | Now |
-|---|---|
-| repo `homebase-id/homebase-invites` | `homebase-id/raven-hosting` (GitHub redirects the old URLs) |
-| image `ghcr.io/homebase-id/homebase-invites-internal` | `ghcr.io/homebase-id/raven-hosting-internal` |
-| controller route `deploy homebase-invites aux homebase-invites-internal` | `deploy raven-hosting aux raven-hosting-internal` |
-| projects `Odin.InvitationCodes.Hosting`, `.Tests` | `Raven.Hosting`, `Raven.Hosting.Tests` |
-| `invites.sh`, `~/.homebase-invites`, `HOMEBASE_INVITES_*` | `raven.sh`, `~/.raven-hosting`, `RAVEN_HOSTING_*` |
-| the upgrade page's cookies `homebase_upgrade`, `homebase_upgrade_antiforgery` | `raven_upgrade`, `raven_upgrade_antiforgery` (owners signed in at the deploy sign in again) |
-
-The settings, under their old names (still read):
-
-| Now | Before |
-|---|---|
-| `RavenHosting__DatabasePath` | `InvitationCodes__DatabasePath` |
-| `RavenHosting__SignupApiKey` | `InvitationCodes__SignupApiKey` |
-| `RavenHosting__CreateApiKey` | `InvitationCodes__CreateApiKey` |
-| `RavenHosting__RequestsPerMinutePerIp` | `InvitationCodes__RequestsPerMinutePerIp` |
-| `RavenHosting__IdentityHosts__<n>` | `PlanService__Hosts__<n>` |
-| `RavenHosting__AccountServiceApiKey` | `PlanService__ApiKey` |
-| `RavenHosting__GrantRetryIntervalSeconds` | `PlanService__RetryIntervalSeconds` |
-| `RavenHosting__ReconcileIntervalHours` | `PlanService__ReconcileIntervalHours` |
-| `RavenHosting__PublicDomain` | `PlanService__PublicDomain` |
-| `RavenHosting__DisplayName` | `PlanService__DisplayName` |
-
-A setting left out under its new name takes its old one's value, and the service logs a warning naming the old
-ones it used. Set under both names with different values, the service refuses to start, rather than guess. The
-image sets `RavenHosting__DatabasePath=/data/invitation-codes.db`, the file it has always used, so a deploy that
-still sets `InvitationCodes__DatabasePath` to that path keeps its data.
-
-`raven.sh` reads `~/.raven-hosting`, or `~/.homebase-invites` when there is none, and the `HOMEBASE_INVITES_*`
-variables when the `RAVEN_HOSTING_*` ones are not set.
-
-Unchanged: the database (file, tables and data), the API paths, the data-protection application name
-(`homebase-invites`, which the keys in the database were made under), and the public domain
-`invites.ravenhosting.cloud`.
 
 ## Known gaps
 
