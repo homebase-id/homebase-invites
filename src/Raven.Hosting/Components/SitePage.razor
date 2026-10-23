@@ -24,7 +24,15 @@
             <div class="account">
                 @if (_signedIn != null)
                 {
-                    <span class="identity">@_signedIn.Identity</span>
+                    <img class="avatar" src="@PublicProfiles.ImageUrl(_signedIn.Identity)" alt="" width="32" height="32"
+                         referrerpolicy="no-referrer">
+                    <span class="who-am-i">
+                        @if (_signedIn.Name != null)
+                        {
+                            <span class="name">@_signedIn.Name</span>
+                        }
+                        <span class="identity">@_signedIn.Identity</span>
+                    </span>
                     <form method="post" action="@($"{UpgradePage.Root}/sign-out")">
                         <AntiforgeryField Token="_antiforgery!" />
                         <button type="submit" class="on-dark">Sign out</button>

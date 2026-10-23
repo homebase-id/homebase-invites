@@ -116,9 +116,38 @@ body {
   margin: 0;
 }
 
+.account .avatar {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border: 2px solid rgb(255 255 255 / 0.7);
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgb(255 255 255 / 0.2);
+}
+
+/* The name over the identity; the identity alone, as bold, when there is no name */
+.account .who-am-i {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.account .name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 .account .identity {
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.account .name + .identity {
+  font-size: 0.8rem;
+  font-weight: 400;
+  opacity: 0.85;
 }
 
 .account .button,
