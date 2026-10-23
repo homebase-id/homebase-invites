@@ -39,18 +39,23 @@ CHECK THE SERVICE
 HOSTING PLANS  (create key)
   A plan is what an identity gets: a quota and whether it has a public home page. The identity
   hosts have no plans of their own; this service sends what a plan gives whenever it gives one.
+  A plan also says whether it has a public email address and how many email aliases it has;
+  those are only shown on its card, and the hosts are not told.
   There are no built-in plans: create them before making codes for them.
 
   plans [--json]
-      Lists the plans as a table: id, name, storage, public page, for sale, prices and sort order.
+      Lists the plans as a table: id, name, storage, public page, public email, email aliases,
+      for sale, prices and sort order.
         --json              print the service's JSON instead of the table (the table needs jq)
 
   plan <plan id> [--json]
-      Shows everything about one plan: name, description, storage, public page, for sale, each
-      price, sort order, and when it was made and last changed. Any case finds it.
+      Shows everything about one plan: name, description, storage, public page, public email,
+      email aliases, for sale, each price, sort order, and when it was made and last changed. Any
+      case finds it.
         --json              print the service's JSON instead (the readable form needs jq)
 
   plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false
+              [--public-email true|false] [--email-aliases <n>]
               [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>]
               [--description <text>]
       Makes a new plan and prints it.
@@ -60,6 +65,10 @@ HOSTING PLANS  (create key)
         --quota-bytes <n>              required: bytes it may store, more than 0, e.g. 1099511627776
                                        for 1 TB. There is no unlimited
         --public-web-presence true|false   required: whether it has a public home page
+        --public-email true|false      optional, false by default: whether it has a public email
+                                       address. Shown on its card only
+        --email-aliases <n>            optional, 0 by default: how many email aliases it has.
+                                       Shown on its card only
         --price <months>:<dollars>     optional, once per billing term: what it costs, in US
                                        dollars, for that many months (1 to 120), e.g.
                                        --price 1:5 --price 12:50 --price 24:90 for \$5 a month,
@@ -71,7 +80,8 @@ HOSTING PLANS  (create key)
         --description <text>           optional: a line shown on its card
 
   plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false]
-            [--for-sale true|false] [--sort-order <n>] [--description <text>]
+            [--public-email true|false] [--email-aliases <n>] [--for-sale true|false]
+            [--sort-order <n>] [--description <text>]
       Changes only what you give. Identities already on the plan keep what they were given; the
       change applies to the next signup or purchase. To retire a plan, use --for-sale false.
       Prices are changed with plan-price.
@@ -228,9 +238,16 @@ plan_fields() { # usage [option value]...; the plan options as JSON fields, in t
       --sort-order)
         [[ "${2:-}" =~ ^-?[0-9]+$ ]] || die "--sort-order must be a whole number, e.g. --sort-order 1"
         fields+=("\"sortOrder\":$2"); shift 2 ;;
-      --public-web-presence|--for-sale)
+      --email-aliases)
+        [[ "${2:-}" =~ ^[0-9]+$ ]] || die "--email-aliases must be a number, 0 or more, e.g. --email-aliases 5"
+        fields+=("\"emailAliases\":$((10#$2))"); shift 2 ;;
+      --public-web-presence|--public-email|--for-sale)
         [[ "${2:-}" =~ ^(true|false)$ ]] || die "$1 must be true or false"
-        name=publicWebPresence; [[ "$1" == --for-sale ]] && name=forSale
+        case "$1" in
+          --public-web-presence) name=publicWebPresence ;;
+          --public-email) name=publicEmail ;;
+          *) name=forSale ;;
+        esac
         fields+=("\"$name\":$2"); shift 2 ;;
       *) die "unknown option: $1" "$usage" ;;
     esac
@@ -358,8 +375,9 @@ INTRO
       def pad(n): . + (" " * ([n - length, 0] | max));
       def clip(n): if length > n then .[0:n - 3] + "..." else . end;
       . as $plans
-      | ["ID", "NAME", "STORAGE", "PUBLIC PAGE", "FOR SALE", "PRICES", "ORDER"] as $head
+      | ["ID", "NAME", "STORAGE", "PUBLIC PAGE", "PUBLIC EMAIL", "ALIASES", "FOR SALE", "PRICES", "ORDER"] as $head
       | [$plans[] | [.id, (.name | clip(30)), .storage, (if .publicWebPresence then "yes" else "no" end),
+                     (if .publicEmail then "yes" else "no" end), "\(.emailAliases)",
                      (if .forSale then "yes" else "no" end),
                      (if (.prices | length) == 0 then "-" else [.prices[].text] | join(", ") end),
                      "\(.sortOrder)"]] as $rows
@@ -386,6 +404,8 @@ INTRO
       "",
       "  storage       \(.storage) (\(.quotaBytes) bytes)",
       "  public page   \(.publicWebPresence | yes)",
+      "  public email  \(.publicEmail | yes)",
+      "  email aliases \(.emailAliases)",
       "  for sale      \(.forSale | yes)",
       "  prices        " + (if (.prices | length) == 0 then "none"
                             else [.prices[] | .text + (if .months == 1 or .months == 12 then "" else " (\(.months) months)" end)]
@@ -395,7 +415,7 @@ INTRO
       "  changed       \(.updatedAt | when)"'
     ;;
   plan-create)
-    plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>] [--description <text>]  (see ./raven.sh help)"
+    plan_create_usage="usage: ./raven.sh plan-create --id <plan id> --name <text> --quota-bytes <n> --public-web-presence true|false [--public-email true|false] [--email-aliases <n>] [--price <months>:<dollars>]... [--for-sale true|false] [--sort-order <n>] [--description <text>]  (see ./raven.sh help)"
     plan_id=""; rest=(); prices=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -417,7 +437,7 @@ INTRO
     base="$PLANS" call POST / "{$(IFS=,; echo "${fields[*]}")}"
     ;;
   plan-edit)
-    plan_edit_usage="usage: ./raven.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--for-sale true|false] [--sort-order <n>] [--description <text>]  (prices: plan-price)"
+    plan_edit_usage="usage: ./raven.sh plan-edit <plan id> [--name <text>] [--quota-bytes <n>] [--public-web-presence true|false] [--public-email true|false] [--email-aliases <n>] [--for-sale true|false] [--sort-order <n>] [--description <text>]  (prices: plan-price)"
     plan_id="${1:-}"
     check_plan_id "$plan_id" "$plan_edit_usage"
     shift

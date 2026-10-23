@@ -87,6 +87,8 @@ grant.
 | `name`, `description` | what owners see; the name is required |
 | `quotaBytes` | bytes an identity on it may store; more than 0, there is no unlimited. `storage` in answers is the same, as people read it (`1 TB`) |
 | `publicWebPresence` | whether an identity on it has a public home page |
+| `publicEmail` | whether it offers a public email address; `false` by default. Advertised only: shown on its card, not sent to the hosts or enforced |
+| `emailAliases` | how many email aliases it offers, 0 or more; `0` by default. Advertised only, like `publicEmail` |
 | `forSale` | whether owners can buy it on the upgrade page; `false` by default. A plan for sale has at least one price |
 | `prices` | what it costs, one price per billing term, shortest first: `{months, amountCents}` in US cents, `months` from 1 to 120 (1 monthly, 12 yearly, 24 two-yearly...), `amountCents` 0 or more (0 is free). Answers add `amount` (`$50`), `per` (`year`) and `text` (`$50 / year`). Nothing charges them yet: the upgrade page's checkout is a test |
 | `sortOrder` | plans are listed, and the upgrade page's cards shown, by this, then by `id`; `0` by default |
@@ -104,16 +106,16 @@ purchase. A plan cannot be deleted while a code or a grant uses it; to retire on
 
 | Call | Answer |
 |---|---|
-| `POST / {id, name, quotaBytes, publicWebPresence, forSale?, description?, prices?: [{months, amountCents}], sortOrder?}` | the new plan; 409 if the Id is taken |
+| `POST / {id, name, quotaBytes, publicWebPresence, publicEmail?, emailAliases?, forSale?, description?, prices?: [{months, amountCents}], sortOrder?}` | the new plan; 409 if the Id is taken |
 | `GET /` | every plan, by `sortOrder`, then `id` |
 | `GET /<id>` | the plan; 404 if there is none |
-| `PATCH /<id> {name?, description?, quotaBytes?, publicWebPresence?, forSale?, sortOrder?}` | the plan as it is now; 404 if there is none. Fields left out stay as they are. `forSale: true` on a plan with no price is a 400 |
+| `PATCH /<id> {name?, description?, quotaBytes?, publicWebPresence?, publicEmail?, emailAliases?, forSale?, sortOrder?}` | the plan as it is now; 404 if there is none. Fields left out stay as they are. `forSale: true` on a plan with no price is a 400 |
 | `PUT /<id>/prices/<months> {amountCents}` | the plan, with that term added or its price changed; 404 if there is no such plan |
 | `DELETE /<id>/prices/<months>` | the plan, without that term; 404 if it has none; 409 for the last price of a plan for sale |
 | `DELETE /<id>` | 204; 404 if there is none; 409 while a code or grant uses it |
 
-Bad input (a bad or reserved Id, no name, a quota of 0 or less, a missing `quotaBytes` or `publicWebPresence`, a
-price for 0 or more than 120 months or below 0, two prices for one term, a plan for sale with no price) is a 400.
+Bad input (a bad or reserved Id, no name, a quota of 0 or less, a missing `quotaBytes` or `publicWebPresence`,
+`emailAliases` below 0, a price for 0 or more than 120 months or below 0, two prices for one term, a plan for sale with no price) is a 400.
 
 Changing a price changes nothing for purchases already made: a purchase grant keeps the term and price it was
 bought at.
@@ -240,10 +242,15 @@ Where an owner gets a bigger plan. Their owner console sends them to
    identity answering `aes-cbc` is refused as a downgrade). A token that opens is the proof the owner of that
    identity is here. The session is a data-protected cookie for the whole site, for an hour.
 3. **Choose** (`/upgrade`): the plans marked for sale as cards, by `sortOrder`: name, description, storage
-   (`1 TB of storage`), whether there is a public home page, and its prices, each term with what it saves on paying
-   monthly when it does (`$50 / year save 17%`, against 12 times the monthly price). The identity's plan,
-   asked of its host as grants find it and matched by plan Id, is marked "Your plan"; when it is not one for sale
-   it is named above the cards.
+   (`1 TB of storage`), whether there is a public home page, whether there is a public email address, how many
+   email aliases, and its prices, each term with what it saves on paying
+   monthly when it does (`$50 / year save 17%`, against 12 times the monthly price). Above them, **Your plan now**:
+   what the identity's host says it has (`GET /api/plans/v1/identities/{identity}`, asked as grants find it), which
+   may differ from what this service last set: the plan's name, how full it is ("12% of 60 GB used", then "7.2 GB
+   used · 52.8 GB free", by `StorageUse`, the owner console's rules), its public home page and whether it is full.
+   The card with its plan Id is marked "Your plan"; every other says how it compares ("940 GB more than now", "Less
+   than you have now (1 TB)"), and one smaller than what the identity stores cannot be chosen, confirmed or bought
+   (`PlanFit`). Anything a newer host adds to its answer is kept (`IdentityOnHost.More`).
 4. **Confirm** (`/upgrade/confirm?plan=<id>`): "Change your plan from A to B", then **How would you like to
    pay?**, one choice per term (the shortest chosen), and **Continue to checkout**.
 5. **Test checkout** (`/upgrade/checkout?plan=<id>&months=<term>`): an order summary with the term's price, and a

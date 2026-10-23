@@ -12,6 +12,8 @@ namespace Raven.Hosting;
 /// <param name="Id">The plan Id, e.g. "veterans"; unique whatever its case, and never changed</param>
 /// <param name="QuotaBytes">Bytes an identity on it may store; more than 0, there is no unlimited</param>
 /// <param name="PublicWebPresence">Whether an identity on it has a public home page</param>
+/// <param name="PublicEmail">Whether it offers a public email address; advertised only, the hosts are not told</param>
+/// <param name="EmailAliases">How many email aliases it offers, 0 or more; advertised only, like PublicEmail</param>
 /// <param name="ForSale">Whether owners can buy it on the upgrade page; a plan for sale has at least one price</param>
 /// <param name="Prices">What it costs, one price per billing term, shortest term first; none for a plan not sold</param>
 /// <param name="SortOrder">Plans are listed by this, then by Id</param>
@@ -21,6 +23,8 @@ public record Plan(
     string Description,
     long QuotaBytes,
     bool PublicWebPresence,
+    bool PublicEmail,
+    int EmailAliases,
     bool ForSale,
     IReadOnlyList<PlanPrice> Prices,
     int SortOrder,
@@ -51,7 +55,8 @@ public record Plan(
     // A record compares lists by reference; plans are the same when their prices are
     public virtual bool Equals(Plan? other) =>
         other != null && Id == other.Id && Name == other.Name && Description == other.Description &&
-        QuotaBytes == other.QuotaBytes && PublicWebPresence == other.PublicWebPresence && ForSale == other.ForSale &&
+        QuotaBytes == other.QuotaBytes && PublicWebPresence == other.PublicWebPresence &&
+        PublicEmail == other.PublicEmail && EmailAliases == other.EmailAliases && ForSale == other.ForSale &&
         Prices.SequenceEqual(other.Prices) && SortOrder == other.SortOrder && CreatedAt == other.CreatedAt &&
         UpdatedAt == other.UpdatedAt;
 
@@ -81,7 +86,8 @@ public record PlanPrice(int Months, long AmountCents)
 public record PlanPriceRequest(int? Months, long? AmountCents);
 
 /// <summary>
-/// A new plan. Description, prices and sort order may be left out; the rest is required. A plan for sale needs at
+/// A new plan. Description, public email (false), email aliases (0), prices and sort order may be left out; the rest
+/// is required. A plan for sale needs at
 /// least one price.
 /// </summary>
 public record PlanRequest(
@@ -92,7 +98,9 @@ public record PlanRequest(
     bool? ForSale = null,
     string? Description = null,
     IReadOnlyList<PlanPriceRequest>? Prices = null,
-    int? SortOrder = null);
+    int? SortOrder = null,
+    bool? PublicEmail = null,
+    int? EmailAliases = null);
 
 /// <summary>
 /// A change to a plan; null leaves a field as it is. The Id cannot be changed; prices are changed one term at a time.
@@ -103,10 +111,13 @@ public record PlanChange(
     long? QuotaBytes = null,
     bool? PublicWebPresence = null,
     bool? ForSale = null,
-    int? SortOrder = null);
+    int? SortOrder = null,
+    bool? PublicEmail = null,
+    int? EmailAliases = null);
 
 /// <summary>
-/// A plan request the store refuses: a bad Id, a missing name, a quota that is not more than 0, a bad price, a plan
+/// A plan request the store refuses: a bad Id, a missing name, a quota that is not more than 0, fewer than 0 email
+/// aliases, a bad price, a plan
 /// for sale without one. The API answers 400.
 /// </summary>
 public class InvalidPlanRequestException(string message) : InvalidInvitationCodeRequestException(message);
@@ -234,6 +245,8 @@ public class PlanStore
         CheckQuota(quotaBytes);
         var publicWebPresence = request.PublicWebPresence ??
                                 throw new InvalidPlanRequestException("publicWebPresence is required");
+        var emailAliases = request.EmailAliases ?? 0;
+        CheckEmailAliases(emailAliases);
 
         var prices = (request.Prices ?? []).Select(p => CheckPrice(
                 p.Months ?? throw new InvalidPlanRequestException("Each price needs months"),
@@ -251,8 +264,8 @@ public class PlanStore
         }
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var plan = new Plan(id, name, request.Description?.Trim() ?? "", quotaBytes, publicWebPresence, forSale, prices,
-            request.SortOrder ?? 0, now, now);
+        var plan = new Plan(id, name, request.Description?.Trim() ?? "", quotaBytes, publicWebPresence,
+            request.PublicEmail ?? false, emailAliases, forSale, prices, request.SortOrder ?? 0, now, now);
 
         await using var connection = await OpenAsync();
         await using var command = connection.CreateCommand();
@@ -320,8 +333,12 @@ public class PlanStore
         {
             CheckQuota(change.QuotaBytes.Value);
         }
-        if (change is { Name: null, Description: null, QuotaBytes: null, PublicWebPresence: null, ForSale: null,
-                SortOrder: null })
+        if (change.EmailAliases != null)
+        {
+            CheckEmailAliases(change.EmailAliases.Value);
+        }
+        if (change is { Name: null, Description: null, QuotaBytes: null, PublicWebPresence: null, PublicEmail: null,
+                EmailAliases: null, ForSale: null, SortOrder: null })
         {
             throw new InvalidPlanRequestException("Nothing to change");
         }
@@ -339,6 +356,8 @@ public class PlanStore
                 Description = change.Description?.Trim() ?? plan.Description,
                 QuotaBytes = change.QuotaBytes ?? plan.QuotaBytes,
                 PublicWebPresence = change.PublicWebPresence ?? plan.PublicWebPresence,
+                PublicEmail = change.PublicEmail ?? plan.PublicEmail,
+                EmailAliases = change.EmailAliases ?? plan.EmailAliases,
                 ForSale = change.ForSale ?? plan.ForSale,
                 SortOrder = change.SortOrder ?? plan.SortOrder,
             };
@@ -456,20 +475,22 @@ public class PlanStore
         List<StoredPrice>? Prices = null,
         int SortOrder = 0,
         long CreatedAt = 0,
-        long UpdatedAt = 0);
+        long UpdatedAt = 0,
+        bool PublicEmail = false,
+        int EmailAliases = 0);
 
     private record StoredPrice(int Months, long AmountCents);
 
     private static string Write(Plan plan) => JsonSerializer.Serialize(new Stored(plan.Name, plan.Description,
         plan.QuotaBytes, plan.PublicWebPresence, plan.ForSale,
         plan.Prices.Select(p => new StoredPrice(p.Months, p.AmountCents)).ToList(), plan.SortOrder, plan.CreatedAt,
-        plan.UpdatedAt), Json);
+        plan.UpdatedAt, plan.PublicEmail, plan.EmailAliases), Json);
 
     private static Plan Read(string id, string json)
     {
         var stored = JsonSerializer.Deserialize<Stored>(json, Json) ?? new Stored();
         return new Plan(id, stored.Name, stored.Description, stored.QuotaBytes, stored.PublicWebPresence,
-            stored.ForSale,
+            stored.PublicEmail, stored.EmailAliases, stored.ForSale,
             (stored.Prices ?? []).Select(p => new PlanPrice(p.Months, p.AmountCents)).OrderBy(p => p.Months).ToList(),
             stored.SortOrder, stored.CreatedAt, stored.UpdatedAt);
     }
@@ -492,6 +513,14 @@ public class PlanStore
         if (quotaBytes <= 0)
         {
             throw new InvalidPlanRequestException("quotaBytes must be more than 0; there is no unlimited");
+        }
+    }
+
+    private static void CheckEmailAliases(int emailAliases)
+    {
+        if (emailAliases < 0)
+        {
+            throw new InvalidPlanRequestException("emailAliases cannot be fewer than 0");
         }
     }
 
@@ -599,7 +628,7 @@ public class PlanStore
             while (await reader.ReadAsync())
             {
                 plans.Add(new Plan(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3),
-                    reader.GetBoolean(4), reader.GetBoolean(5),
+                    reader.GetBoolean(4), PublicEmail: false, EmailAliases: 0, reader.GetBoolean(5),
                     prices.TryGetValue(reader.GetString(0), out var planPrices) ? planPrices : [],
                     reader.GetInt32(6), reader.GetInt64(7), reader.GetInt64(8)));
             }

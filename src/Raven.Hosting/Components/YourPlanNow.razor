@@ -1,0 +1,39 @@
+@* What the signed-in owner has now, as their host says: it may differ from the plan here of the same name, if it
+   was changed on the host *@
+<section class="card now" aria-labelledby="now-heading">
+    <p class="muted">Your plan now</p>
+    <h2 id="now-heading">@PlanName</h2>
+    @if (Now.Storage is { } storage)
+    {
+        <p class="usage">@storage.PercentText of @storage.Size used</p>
+        <div class="meter" role="meter" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100"
+             aria-valuenow="@(storage.Percent ?? 0)">
+            <span class="@(Now.IsOverQuota == true ? "full" : null)" style="width: @Width%"></span>
+        </div>
+        <p class="muted">@storage.UsedText used · @storage.Free free</p>
+    }
+    else if (Now.QuotaBytes is { } quota)
+    {
+        <p class="usage">@StorageSize.Format(quota) of storage</p>
+    }
+    @if (Now.PublicWebPresence is { } page)
+    {
+        <ul class="gives">
+            <li>@(page ? "A public home page" : "No public home page")</li>
+        </ul>
+    }
+    @if (Now.IsOverQuota == true)
+    {
+        <p class="problem">Your storage is full: new photos, videos and files are refused. A bigger plan makes room.</p>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IdentityOnHost Now { get; set; } = null!;
+    [Parameter] public string PlanName { get; set; } = "";
+
+    // The bar: exact, not the rounded percentage
+    private string Width => Now is { QuotaBytes: > 0, UsedBytes: { } used }
+        ? Math.Min(100, (double)used / Now.QuotaBytes.Value * 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)
+        : "0";
+}

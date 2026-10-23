@@ -319,9 +319,20 @@ main.frame {
   display: none;
 }
 
-.plans .card > .button,
-.plans .card > .badge {
-  justify-self: start;
+/* The last part: how it compares with what the owner has now, then the button or "Your plan" */
+.choice .badge {
+  margin: 0;
+}
+
+.fit {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.fit.more {
+  color: var(--green);
 }
 
 .plans .card.current {
@@ -359,14 +370,13 @@ main.frame {
     display: block;
   }
 
-  .plans .card > .button,
-  .plans .card > .badge {
+  .plans .card > .choice {
     align-self: end;
     margin-top: 0.75rem;
   }
 
   /* "Your plan" as big as the buttons beside it, so the row stays level; outlined, as it is not one */
-  .plans .card > .badge {
+  .choice .badge {
     padding: calc(0.8rem - 1px) 1.5rem;
     border: 2px solid var(--purple);
     background: transparent;
@@ -630,4 +640,38 @@ button.on-dark:hover,
 /* Teal does not show on the gradient */
 .site-header :focus-visible {
   outline-color: #fff;
+}
+
+/* What the owner has now, as their host says */
+
+.now {
+  max-width: 40rem;
+  margin-bottom: 2rem;
+}
+
+.now h2 {
+  margin-bottom: 0.75rem;
+}
+
+.usage {
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.meter {
+  height: 0.5rem;
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+}
+
+.meter span.full {
+  background: #b42318;
 }

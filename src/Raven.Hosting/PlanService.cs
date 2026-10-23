@@ -39,7 +39,7 @@ public class PlanHosts
 /// Sets the plans grants owe on the identity hosts. Finds the host that serves an identity by asking the known
 /// hosts (the hint and the last host seen first), sets the plan there with the grant's reference, and keeps a grant
 /// pending, with backoff, until its host has it. The host API (odin-core #1994, on the provisioning domain):
-/// <c>GET /api/plans/v1/identities/{identity}</c> answers <c>{domain, planId, quotaBytes, publicWebPresence}</c>, and
+/// <c>GET /api/plans/v1/identities/{identity}</c> answers what the identity has now (<see cref="IdentityOnHost"/>), and
 /// <c>PUT .../{identity}/plan {planId, quotaBytes, publicWebPresence, reference}</c> sets them; values left out stay as
 /// they are. Both are 404 for an identity the host does not serve.
 /// </summary>
@@ -232,8 +232,14 @@ public class PlanService(
         return (located.Host, located.Identity?.PlanId, located.Error);
     }
 
-    // As LocateAsync, with all the host said about the identity
-    private async Task<(string? Host, HostIdentity? Identity, string? Error)> LocateIdentityAsync(string identity,
+    /// <summary>
+    /// As <see cref="LocateAsync"/>, with everything the host says the identity has now: its plan may have been
+    /// changed there since this service last set it
+    /// </summary>
+    public Task<(string? Host, IdentityOnHost? Identity, string? Error)> LookUpAsync(string identity, string? hint) =>
+        LocateIdentityAsync(identity, hint, skip: null);
+
+    private async Task<(string? Host, IdentityOnHost? Identity, string? Error)> LocateIdentityAsync(string identity,
         string? hint, string? skip)
     {
         if (hosts.Hosts.Count == 0)
@@ -283,7 +289,7 @@ public class PlanService(
     }
 
     // What differs between the grant and the identity on its host, e.g. "quota 1048576"; null when nothing does
-    private static string? Drift(PlanGrant grant, HostIdentity identity)
+    private static string? Drift(PlanGrant grant, IdentityOnHost identity)
     {
         var drift = new List<string>();
         if (!string.Equals(identity.PlanId, grant.PlanId, StringComparison.OrdinalIgnoreCase))
@@ -302,7 +308,7 @@ public class PlanService(
         return drift.Count == 0 ? null : string.Join(", ", drift);
     }
 
-    private async Task<(HttpStatusCode? Status, HostIdentity? Identity, string? Error)> GetPlanAsync(string host,
+    private async Task<(HttpStatusCode? Status, IdentityOnHost? Identity, string? Error)> GetPlanAsync(string host,
         string identity)
     {
         try
@@ -314,8 +320,8 @@ public class PlanService(
             {
                 return (response.StatusCode, null, await DescribeAsync(response));
             }
-            var body = await response.Content.ReadFromJsonAsync<HostIdentity>();
-            return (HttpStatusCode.OK, body ?? new HostIdentity(identity, null, null, null), null);
+            var body = await response.Content.ReadFromJsonAsync<IdentityOnHost>();
+            return (HttpStatusCode.OK, body ?? new IdentityOnHost(identity, null, null, null), null);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
@@ -352,8 +358,6 @@ public class PlanService(
         return string.IsNullOrWhiteSpace(body) ? status : $"{status}: {(body.Length > 200 ? body[..200] : body)}";
     }
 
-    // QuotaBytes and PublicWebPresence are null from hosts before odin-core #1994, which do not say them
-    private record HostIdentity(string? Domain, string? PlanId, long? QuotaBytes, bool? PublicWebPresence);
 
     // A grant from before plans were kept here leaves out the quota and public web presence: the host keeps its own
     private record HostSetPlan(
@@ -394,4 +398,27 @@ public class PlanGrantWorker(PlanService plans, IConfiguration configuration, IL
             }
         }
     }
+}
+
+/// <summary>
+/// What an identity has now, as its host says (GET /api/plans/v1/identities/{identity}): not necessarily what this
+/// service last set, as it may have been changed on the host since. Each field is null from a host too old to say
+/// it; anything a newer host adds is kept in <see cref="More"/>, so it is not lost before this service knows it.
+/// </summary>
+/// <param name="QuotaBytes">The quota in effect: the identity's own, or its host's default</param>
+/// <param name="UsedBytes">What it stores, up to a minute old</param>
+/// <param name="IsOverQuota">At or over its quota, or marked out of quota: new photos and files are refused</param>
+public record IdentityOnHost(
+    string? Domain,
+    string? PlanId,
+    long? QuotaBytes,
+    bool? PublicWebPresence,
+    long? UsedBytes = null,
+    bool? IsOverQuota = null)
+{
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? More { get; init; }
+
+    /// <summary>How full it is, when the host says both what it stores and its quota</summary>
+    public StorageUse? Storage => QuotaBytes is { } quota && UsedBytes is { } used ? StorageUse.Of(used, quota) : null;
 }

@@ -409,7 +409,7 @@ public class RavenCliTests
 
         var plan = result.Json<Plan>();
         Assert.That(plan with { CreatedAt = 0, UpdatedAt = 0 }, Is.EqualTo(new Plan("cli-gold", "Gold", "A small plan",
-            5368709120, false, true, [new(1, 200), new(12, 1950)], -1, 0, 0)));
+            5368709120, false, false, 0, true, [new(1, 200), new(12, 1950)], -1, 0, 0)));
     }
 
     [Test]
@@ -421,9 +421,9 @@ public class RavenCliTests
 
         Assert.That(result.ExitCode, Is.EqualTo(0), result.Error);
         var lines = result.Output.Split('\n');
-        Assert.That(lines[0], Does.Match(@"^ID +NAME +STORAGE +PUBLIC PAGE +FOR SALE +PRICES +ORDER$"));
-        Assert.That(lines, Has.Some.Match(@"^cli-table +Table plan +1 TB +yes +yes +\$1 / month, \$10 / year +0$"));
-        Assert.That(lines, Has.Some.Match(@"^tiny-test +Tiny test +1 MB +no +no +- +0$"));
+        Assert.That(lines[0], Does.Match(@"^ID +NAME +STORAGE +PUBLIC PAGE +PUBLIC EMAIL +ALIASES +FOR SALE +PRICES +ORDER$"));
+        Assert.That(lines, Has.Some.Match(@"^cli-table +Table plan +1 TB +yes +no +0 +yes +\$1 / month, \$10 / year +0$"));
+        Assert.That(lines, Has.Some.Match(@"^tiny-test +Tiny test +1 MB +no +no +0 +no +- +0$"));
         Assert.That((await RunAsync("plans", "--json")).Json<List<Plan>>().Select(p => p.Id), Does.Contain("cli-table"));
     }
 
