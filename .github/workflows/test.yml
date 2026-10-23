@@ -22,7 +22,7 @@ jobs:
         with:
           global-json-file: global.json
 
-      # The invites.sh tests run the script with bash, curl and jq; they fail rather than skip under CI
+      # The raven.sh tests run the script with bash, curl and jq; they fail rather than skip under CI
       # when jq is missing
       - name: Check the command line tools
         run: bash --version | head -1 && curl --version | head -1 && jq --version
